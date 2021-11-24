@@ -74,14 +74,21 @@ SERIAL_ORDER OTG1 USART1 USART2 USART3 UART4 UART5 USART6 UART7
 # USART1
 PA10 USART1_RX USART1 NODMA
 PA9  USART1_TX USART1
+#########################################
+# ArroTech NB: In future board revisions this should be swapped with PB10
+#              because Timer #1 is already used for the motor outputs
+#PA9 LED_BOT OUTPUT LOW GPIO(68) # ArroTech Bottom LED
 
 # USART2
 PD5 USART2_TX USART2
 PD6 USART2_RX USART2 NODMA
 
 # USART3
-PB10 USART3_TX USART3
+PB10 USART3_TX USART3 PULLDOWN LOW GPIO(46)
 PB11 USART3_RX USART3
+# ArroTech Activation Button
+define HAL_HAVE_SAFETY_SWITCH 1
+define HAL_GPIO_PIN_SAFETY_IN PAL_LINE(GPIOB,10U)
 
 # UART4
 PA0 UART4_TX UART4
