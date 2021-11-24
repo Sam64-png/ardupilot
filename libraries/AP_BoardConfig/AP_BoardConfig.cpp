@@ -443,7 +443,7 @@ void AP_BoardConfig::config_error(const char *fmt, ...)
  */
 bool AP_BoardConfig::safety_button_handle_pressed(uint8_t press_count)
 {
-    if (press_count != 10) {
+    if (press_count != 1) {
         return false;
     }
     // get button options
