@@ -56,7 +56,7 @@ public:
     bool get_vector_xy_from_origin_NE(Vector2f &vec_ne) const WARN_IF_UNUSED;
     bool get_vector_from_origin_NEU(Vector3f &vec_neu) const WARN_IF_UNUSED;
 
-    // return distance in meters between two locations
+    // return horizontal distance in meters between two locations
     ftype get_distance(const struct Location &loc2) const;
 
     // return the altitude difference in meters taking into account alt frame.
@@ -92,10 +92,13 @@ public:
 
     void zero(void);
 
-    // return bearing in centi-degrees from location to loc2
-    int32_t get_bearing_to(const struct Location &loc2) const;
-    // return the bearing in radians
-    ftype get_bearing(const struct Location &loc2) const { return radians(get_bearing_to(loc2) * 0.01); } ;
+    // return the bearing in radians, from 0 to 2*Pi
+    ftype get_bearing(const struct Location &loc2) const;
+
+    // return bearing in centi-degrees from location to loc2, return is 0 to 35999
+    int32_t get_bearing_to(const struct Location &loc2) const {
+        return int32_t(get_bearing(loc2) * DEGX100 + 0.5);
+    }
 
     // check if lat and lng match. Ignore altitude and options
     bool same_latlon_as(const Location &loc2) const;

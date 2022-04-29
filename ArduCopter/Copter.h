@@ -34,7 +34,6 @@
 #include <StorageManager/StorageManager.h>  // library for Management for hal.storage to allow for backwards compatible mapping of storage offsets to available storage
 
 // Application dependencies
-#include <GCS_MAVLink/GCS.h>                // Library for Interface definition for the various Ground Control System
 #include <AP_Logger/AP_Logger.h>            // ArduPilot Mega Flash Memory Library
 #include <AP_Math/AP_Math.h>                // ArduPilot Mega Vector/Matrix math Library
 #include <AP_AccelCal/AP_AccelCal.h>        // interface and maths for accelerometer calibration
@@ -63,7 +62,8 @@
 #include <AP_Arming/AP_Arming.h>            // ArduPilot motor arming library
 #include <AP_SmartRTL/AP_SmartRTL.h>        // ArduPilot Smart Return To Launch Mode (SRTL) library
 #include <AP_TempCalibration/AP_TempCalibration.h>  // temperature calibration library
-#include <AC_AutoTune/AC_AutoTune.h>        // ArduCopter autotune library. support for autotune of multirotors.
+#include <AC_AutoTune/AC_AutoTune_Multi.h>  // ArduCopter autotune library. support for autotune of multirotors.
+#include <AC_AutoTune/AC_AutoTune_Heli.h>   // ArduCopter autotune library. support for autotune of helicopters.
 #include <AP_Parachute/AP_Parachute.h>      // ArduPilot parachute release library
 #include <AC_Sprayer/AC_Sprayer.h>          // Crop sprayer library
 #include <AP_ADSB/AP_ADSB.h>                // ADS-B RF based collision avoidance module library
@@ -357,13 +357,15 @@ private:
             uint8_t unused3                 : 1; // 25      // was compass_init_location; true when the compass's initial location has been set
             uint8_t unused2                 : 1; // 26      // aux switch rc_override is allowed
             uint8_t armed_with_airmode_switch : 1; // 27      // we armed using a arming switch
+            uint8_t prec_land_active        : 1; // 28      // true if precland is active
         };
         uint32_t value;
     } ap_t;
 
     ap_t ap;
 
-    AirMode air_mode; // air mode is 0 = not-configured ; 1 = disabled; 2 = enabled
+    AirMode air_mode; // air mode is 0 = not-configured ; 1 = disabled; 2 = enabled;
+    bool force_flying; // force flying is enabled when true;
 
     static_assert(sizeof(uint32_t) == sizeof(ap), "ap_t must be uint32_t");
 
@@ -509,8 +511,8 @@ private:
 #endif
 
     // terrain handling
-#if AP_TERRAIN_AVAILABLE && MODE_AUTO_ENABLED == ENABLED
-    AP_Terrain terrain{mode_auto.mission};
+#if AP_TERRAIN_AVAILABLE
+    AP_Terrain terrain;
 #endif
 
     // Precision Landing
@@ -606,6 +608,7 @@ private:
     enum class FlightOptions {
         DISABLE_THRUST_LOSS_CHECK     = (1<<0),   // 1
         DISABLE_YAW_IMBALANCE_WARNING = (1<<1),   // 2
+        RELEASE_GRIPPER_ON_THRUST_LOSS = (1<<2),  // 4
     };
 
     static constexpr int8_t _failsafe_priorities[] = {
@@ -649,6 +652,12 @@ private:
     bool set_target_angle_and_climbrate(float roll_deg, float pitch_deg, float yaw_deg, float climb_rate_ms, bool use_yaw_rate, float yaw_rate_degs) override;
     bool get_circle_radius(float &radius_m) override;
     bool set_circle_rate(float rate_dps) override;
+    bool nav_scripting_enable(uint8_t mode) override;
+    bool nav_script_time(uint16_t &id, uint8_t &cmd, float &arg1, float &arg2) override;
+    void nav_script_time_done(uint16_t id) override;
+    // lua scripts use this to retrieve EKF failsafe state
+    // returns true if the EKF failsafe has triggered
+    bool has_ekf_failsafed() const override;
 #endif // AP_SCRIPTING_ENABLED
     void rc_loop();
     void throttle_loop();
@@ -737,6 +746,7 @@ private:
     void set_mode_auto_do_land_start_or_RTL(ModeReason reason);
     bool should_disarm_on_failsafe();
     void do_failsafe_action(FailsafeAction action, ModeReason reason);
+    void announce_failsafe(const char *type, const char *action_undertaken=nullptr);
 
     // failsafe.cpp
     void failsafe_enable();
@@ -872,7 +882,6 @@ private:
     // system.cpp
     void init_ardupilot() override;
     void startup_INS_ground();
-    void update_dynamic_notch() override;
     bool position_ok() const;
     bool ekf_has_absolute_position() const;
     bool ekf_has_relative_position() const;

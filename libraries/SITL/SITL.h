@@ -2,7 +2,7 @@
 
 #include <AP_HAL/AP_HAL_Boards.h>
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
+#if AP_SIM_ENABLED
 
 #include <AP_Math/AP_Math.h>
 #include <GCS_MAVLink/GCS_MAVLink.h>
@@ -181,6 +181,7 @@ public:
     AP_Float sonar_glitch;// probability between 0-1 that any given sonar sample will read as max distance
     AP_Float sonar_noise; // in metres
     AP_Float sonar_scale; // meters per volt
+    AP_Int8 sonar_rot;  // from rotations enumeration
 
     AP_Float drift_speed; // degrees/second/minute
     AP_Float drift_time;  // period in minutes
@@ -447,16 +448,20 @@ public:
     // get the rangefinder reading for the desired instance, returns -1 for no data
     float get_rangefinder(uint8_t instance);
 
+    float measure_distance_at_angle_bf(const Location &location, float angle) const;
+
     // get the apparent wind speed and direction as set by external physics backend
     float get_apparent_wind_dir() const{return state.wind_vane_apparent.direction;}
     float get_apparent_wind_spd() const{return state.wind_vane_apparent.speed;}
 
+#if HAL_INS_TEMPERATURE_CAL_ENABLE
     // IMU temperature calibration params
     AP_Float imu_temp_start;
     AP_Float imu_temp_end;
     AP_Float imu_temp_tconst;
     AP_Float imu_temp_fixed;
     AP_InertialSensor::TCal imu_tcal[INS_MAX_INSTANCES];
+#endif
 
     // IMU control parameters
     AP_Float gyro_noise[INS_MAX_INSTANCES];  // in degrees/second
@@ -484,4 +489,4 @@ namespace AP {
     SITL::SIM *sitl();
 };
 
-#endif // CONFIG_HAL_BOARD
+#endif // AP_SIM_ENABLED

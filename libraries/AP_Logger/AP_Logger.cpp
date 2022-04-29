@@ -27,7 +27,7 @@ extern const AP_HAL::HAL& hal;
 #endif
 
 #ifndef HAL_LOGGING_STACK_SIZE
-#define HAL_LOGGING_STACK_SIZE 1324
+#define HAL_LOGGING_STACK_SIZE 1580
 #endif
 
 #ifndef HAL_LOGGING_MAV_BUFSIZE
@@ -1296,7 +1296,7 @@ int16_t AP_Logger::Write_calc_msg_len(const char *fmt) const
 void AP_Logger::io_thread(void)
 {
     uint32_t last_run_us = AP_HAL::micros();
-    uint8_t counter = 0;
+    uint32_t last_stack_us = last_run_us;
 
     while (true) {
         uint32_t now = AP_HAL::micros();
@@ -1311,7 +1311,8 @@ void AP_Logger::io_thread(void)
 
         FOR_EACH_BACKEND(io_timer());
 
-        if (++counter % 4 == 0) {
+        if (now - last_stack_us > 100000U) {
+            last_stack_us = now;
             hal.util->log_stack_info();
         }
 #if HAL_LOGGER_FILE_CONTENTS_ENABLED
@@ -1416,6 +1417,7 @@ void AP_Logger::prepare_at_arming_sys_file_logging()
         "@SYS/dma.txt",
         "@SYS/memory.txt",
         "@SYS/threads.txt",
+        "@SYS/timers.txt",
         "@ROMFS/hwdef.dat",
         "@SYS/storage.bin",
         "@SYS/crash_dump.bin",
@@ -1530,14 +1532,15 @@ void AP_Logger::file_content_update(FileContent &file_content)
         return;
     }
 
-    /* this function is called at max 1kHz. We don't want to saturate
-       the logging with file data, so we reduce the frequency of 64
-       byte file writes by a factor of 100. For the file
-       crash_dump.bin we dump 10x faster so we get it in a reasonable
-       time (full dump of 450k in about 1 minute)
+    /* this function is called at around 100Hz on average (tested on
+       400Hz copter). We don't want to saturate the logging with file
+       data, so we reduce the frequency of 64 byte file writes by a
+       factor of 10. For the file crash_dump.bin we dump 10x faster so
+       we get it in a reasonable time (full dump of 450k in about 1
+       minute)
     */
     file_content.counter++;
-    const uint8_t frequency = file_content.fast?10:100;
+    const uint8_t frequency = file_content.fast?1:10;
     if (file_content.counter % frequency != 0) {
         return;
     }
@@ -1563,6 +1566,7 @@ void AP_Logger::file_content_update(FileContent &file_content)
     const auto length = AP::FS().read(file_content.fd, pkt.data, sizeof(pkt.data));
     if (length <= 0) {
         AP::FS().close(file_content.fd);
+        file_content.fd = -1;
         file_content.remove_and_free(file);
         return;
     }

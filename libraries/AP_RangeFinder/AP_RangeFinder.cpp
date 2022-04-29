@@ -187,6 +187,7 @@ void RangeFinder::convert_params(void) {
     };
 
     const struct ConversionTable conversionTable[] = {
+        // PARAMETER_CONVERSION - Added: Feb-2019
             // rangefinder 1
             {0, 0, 0}, //0, TYPE 1
             {1, 1, 0}, //1, PIN 1
@@ -339,6 +340,7 @@ bool RangeFinder::_add_backend(AP_RangeFinder_Backend *backend, uint8_t instance
  */
 void RangeFinder::detect_instance(uint8_t instance, uint8_t& serial_instance)
 {
+#if AP_RANGEFINDER_ENABLED
     const Type _type = (Type)params[instance].type.get();
     switch (_type) {
     case Type::PLI2C:
@@ -583,7 +585,7 @@ void RangeFinder::detect_instance(uint8_t instance, uint8_t& serial_instance)
     case Type::Benewake_CAN:
         _add_backend(new AP_RangeFinder_Benewake_CAN(state[instance], params[instance]), instance);
         break;
-#endif
+#endif //HAL_MAX_CAN_PROTOCOL_DRIVERS
     case Type::NONE:
     default:
         break;
@@ -597,6 +599,7 @@ void RangeFinder::detect_instance(uint8_t instance, uint8_t& serial_instance)
         // param count could have changed
         AP_Param::invalidate_count();
     }
+#endif //AP_RANGEFINDER_ENABLED
 }
 
 AP_RangeFinder_Backend *RangeFinder::get_backend(uint8_t id) const {
@@ -841,3 +844,4 @@ RangeFinder *rangefinder()
 }
 
 }
+

@@ -235,8 +235,8 @@ void AP_GPS_Backend::set_uart_timestamp(uint16_t nbytes)
 
 void AP_GPS_Backend::check_new_itow(uint32_t itow, uint32_t msg_length)
 {
-    if (itow != _last_itow) {
-        _last_itow = itow;
+    if (itow != _last_itow_ms) {
+        _last_itow_ms = itow;
 
         /*
           we need to calculate a pseudo-itow, which copes with the
@@ -250,11 +250,12 @@ void AP_GPS_Backend::check_new_itow(uint32_t itow, uint32_t msg_length)
 
         // get the time the packet arrived on the UART
         uint64_t uart_us;
-        if (port && _last_pps_time_us == 0) {
-            uart_us = port->receive_time_constraint_us(msg_length);
-        } else if (_last_pps_time_us != 0) {
+        if (_last_pps_time_us != 0 && (state.status >= AP_GPS::GPS_OK_FIX_2D)) {
+            // pps is only reliable when we have some sort of GPS fix
             uart_us = _last_pps_time_us;
             _last_pps_time_us = 0;
+        } else if (port) {
+            uart_us = port->receive_time_constraint_us(msg_length);
         } else {
             uart_us = AP_HAL::micros64();
         }

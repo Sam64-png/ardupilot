@@ -150,9 +150,6 @@ constexpr int8_t Rover::_failsafe_priorities[7];
 Rover::Rover(void) :
     AP_Vehicle(),
     param_loader(var_info),
-    channel_steer(nullptr),
-    channel_throttle(nullptr),
-    channel_lateral(nullptr),
     logger{g.log_bitmask},
     modes(&g.mode1),
     control_mode(&mode_initializing)
@@ -168,7 +165,7 @@ bool Rover::set_target_location(const Location& target_loc)
         return false;
     }
 
-    return control_mode->set_desired_location(target_loc);
+    return mode_guided.set_desired_location(target_loc);
 }
 
 // set target velocity (for use by scripting)
@@ -204,6 +201,19 @@ bool Rover::set_steering_and_throttle(float steering, float throttle)
     return true;
 }
 
+// set desired turn rate (degrees/sec) and speed (m/s). Used for scripting
+bool Rover::set_desired_turn_rate_and_speed(float turn_rate, float speed)
+{
+    // exit if vehicle is not in Guided mode or Auto-Guided mode
+    if (!control_mode->in_guided_mode()) {
+        return false;
+    }
+
+    // set turn rate and speed. Turn rate is expected in centidegrees/s and speed in meters/s
+    mode_guided.set_desired_turn_rate_and_speed(turn_rate * 100.0f, speed);
+    return true;
+}
+
 // get control output (for use in scripting)
 // returns true on success and control_value is set to a value in the range -1 to +1
 bool Rover::get_control_output(AP_Vehicle::ControlOutput control_output, float &control_value)
@@ -217,7 +227,7 @@ bool Rover::get_control_output(AP_Vehicle::ControlOutput control_output, float &
         return true;
     case AP_Vehicle::ControlOutput::Walking_Height:
         control_value = constrain_float(g2.motors.get_walking_height(), -1.0f, 1.0f);
-        return true;    
+        return true;
     case AP_Vehicle::ControlOutput::Throttle:
         control_value = constrain_float(g2.motors.get_throttle() / 100.0f, -1.0f, 1.0f);
         return true;
@@ -237,6 +247,32 @@ bool Rover::get_control_output(AP_Vehicle::ControlOutput control_output, float &
         return false;
     }
     return false;
+}
+
+// returns true if mode supports NAV_SCRIPT_TIME mission commands
+bool Rover::nav_scripting_enable(uint8_t mode)
+{
+    return mode == (uint8_t)mode_auto.mode_number();
+}
+
+// lua scripts use this to retrieve the contents of the active command
+bool Rover::nav_script_time(uint16_t &id, uint8_t &cmd, float &arg1, float &arg2)
+{
+    if (control_mode != &mode_auto) {
+        return false;
+    }
+
+    return mode_auto.nav_script_time(id, cmd, arg1, arg2);
+}
+
+// lua scripts use this to indicate when they have complete the command
+void Rover::nav_script_time_done(uint16_t id)
+{
+    if (control_mode != &mode_auto) {
+        return;
+    }
+
+    return mode_auto.nav_script_time_done(id);
 }
 #endif // AP_SCRIPTING_ENABLED
 
@@ -330,16 +366,21 @@ void Rover::update_logging1(void)
 
     if (should_log(MASK_LOG_THR)) {
         Log_Write_Throttle();
-        logger.Write_Beacon(g2.beacon);
+        g2.beacon.log();
     }
 
     if (should_log(MASK_LOG_NTUN)) {
         Log_Write_Nav_Tuning();
+        if (g2.pos_control.is_active()) {
+            g2.pos_control.write_log();
+            logger.Write_PID(LOG_PIDN_MSG, g2.pos_control.get_vel_pid().get_pid_info_x());
+            logger.Write_PID(LOG_PIDE_MSG, g2.pos_control.get_vel_pid().get_pid_info_y());
+        }
     }
 
 #if HAL_PROXIMITY_ENABLED
     if (should_log(MASK_LOG_RANGEFINDER)) {
-        logger.Write_Proximity(g2.proximity);
+        g2.proximity.log();
     }
 #endif
 }
@@ -397,6 +438,7 @@ void Rover::one_second_loop(void)
 
     // send latest param values to wp_nav
     g2.wp_nav.set_turn_params(g2.turn_radius, g2.motors.have_skid_steering());
+    g2.pos_control.set_turn_params(g2.turn_radius, g2.motors.have_skid_steering());
 }
 
 void Rover::update_current_mode(void)

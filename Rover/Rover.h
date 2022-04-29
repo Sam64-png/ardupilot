@@ -34,7 +34,6 @@
 #include <AP_Compass/AP_Compass.h>                  // ArduPilot Mega Magnetometer Library
 #include <AP_Declination/AP_Declination.h>          // Compass declination library
 #include <AP_InertialSensor/AP_InertialSensor.h>    // Inertial Sensor (uncalibated IMU) Library
-#include <AP_L1_Control/AP_L1_Control.h>
 #include <AP_Math/AP_Math.h>                        // ArduPilot Mega Vector/Matrix math Library
 #include <AP_Mission/AP_Mission.h>                  // Mission command library
 #include <AP_Mount/AP_Mount.h>                      // Camera/Antenna mount
@@ -45,6 +44,7 @@
 #include <AP_Param/AP_Param.h>
 #include <AP_RangeFinder/AP_RangeFinder.h>          // Range finder library
 #include <AP_RCMapper/AP_RCMapper.h>                // RC input mapping library
+#include <AP_RPM/AP_RPM.h>                          // RPM input library
 #include <AP_Scheduler/AP_Scheduler.h>              // main loop scheduler
 #include <AP_Stats/AP_Stats.h>                      // statistics library
 #include <AP_Terrain/AP_Terrain.h>
@@ -52,7 +52,8 @@
 #include <AP_WheelEncoder/AP_WheelEncoder.h>
 #include <AP_WheelEncoder/AP_WheelRateControl.h>
 #include <APM_Control/AR_AttitudeControl.h>
-#include <AR_WPNav/AR_WPNav.h>
+#include <APM_Control/AR_PosControl.h>
+#include <AR_WPNav/AR_WPNav_OA.h>
 #include <AP_SmartRTL/AP_SmartRTL.h>
 #include <AP_Logger/AP_Logger.h>
 #include <Filter/AverageFilter.h>                   // Mode Filter from Filter library
@@ -155,8 +156,6 @@ private:
 
     // Arming/Disarming management class
     AP_Arming_Rover arming;
-
-    AP_L1_Control L1_controller{ahrs, nullptr};
 
 #if AP_OPTICALFLOW_ENABLED
     OpticalFlow optflow;
@@ -271,7 +270,12 @@ private:
     bool set_target_location(const Location& target_loc) override;
     bool set_target_velocity_NED(const Vector3f& vel_ned) override;
     bool set_steering_and_throttle(float steering, float throttle) override;
+    // set desired turn rate (degrees/sec) and speed (m/s). Used for scripting
+    bool set_desired_turn_rate_and_speed(float turn_rate, float speed) override;
     bool get_control_output(AP_Vehicle::ControlOutput control_output, float &control_value) override;
+    bool nav_scripting_enable(uint8_t mode) override;
+    bool nav_script_time(uint16_t &id, uint8_t &cmd, float &arg1, float &arg2) override;
+    void nav_script_time_done(uint16_t id) override;
 #endif // AP_SCRIPTING_ENABLED
     void stats_update();
     void ahrs_update();
@@ -325,7 +329,6 @@ private:
     void Log_Write_GuidedTarget(uint8_t target_type, const Vector3f& pos_target, const Vector3f& vel_target);
     void Log_Write_Nav_Tuning();
     void Log_Write_Sail();
-    void Log_Write_Startup(uint8_t type);
     void Log_Write_Steering();
     void Log_Write_Throttle();
     void Log_Write_RC(void);

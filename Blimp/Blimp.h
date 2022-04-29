@@ -34,7 +34,6 @@
 #include <StorageManager/StorageManager.h>
 
 // Application dependencies
-#include <GCS_MAVLink/GCS.h>
 #include <AP_Logger/AP_Logger.h>          // ArduPilot Mega Flash Memory Library
 #include <AP_Math/AP_Math.h>            // ArduPilot Mega Vector/Matrix math Library
 // #include <AP_AccelCal/AP_AccelCal.h>                // interface and maths for accelerometer calibration
@@ -210,7 +209,6 @@ private:
 
     // Altitude
     int32_t baro_alt;            // barometer altitude in cm above home
-    LowPassFilterVector3f land_accel_ef_filter; // accelerations for land and crash detector tests
 
     // filtered pilot's throttle input used to cancel landing if throttle held high
     LowPassFilterFloat rc_throttle_control_in_filter;

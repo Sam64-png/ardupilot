@@ -310,7 +310,7 @@ class AutoTestRover(AutoTest):
             self.change_mode("AUTO")
 #            self.send_debug_trap()
             self.progress("Waiting for sprayer to start")
-            self.wait_servo_channel_value(pump_ch, 1300, timeout=60, comparator=operator.gt)
+            self.wait_servo_channel_value(pump_ch, 1250, timeout=60, comparator=operator.gt)
             self.progress("Waiting for sprayer to stop")
             self.wait_servo_channel_value(pump_ch, pump_ch_min, timeout=120)
 
@@ -535,12 +535,7 @@ Brakes have negligible effect (with=%0.2fm without=%0.2fm delta=%0.2fm)
 
         self.drain_mav()
 
-        m = self.mav.recv_match(type='NAV_CONTROLLER_OUTPUT',
-                                blocking=True,
-                                timeout=1)
-        if m is None:
-            raise MsgRcvTimeoutException(
-                "Did not receive NAV_CONTROLLER_OUTPUT message")
+        m = self.assert_receive_message('NAV_CONTROLLER_OUTPUT', timeout=1)
 
         wp_dist_min = 5
         if m.wp_dist < wp_dist_min:
@@ -552,7 +547,7 @@ Brakes have negligible effect (with=%0.2fm without=%0.2fm delta=%0.2fm)
                       (m.wp_dist, wp_dist_min,))
 
         # wait for mission to complete
-        self.wait_statustext("Mission Complete", timeout=60)
+        self.wait_statustext("Mission Complete", timeout=70)
 
         # the EKF doesn't pull us down to 0 speed:
         self.wait_groundspeed(0, 0.5, timeout=600)
@@ -963,11 +958,7 @@ Brakes have negligible effect (with=%0.2fm without=%0.2fm delta=%0.2fm)
                 delta = self.get_sim_time() - tstart
                 if delta > 20:
                     break
-                m = self.mav.recv_match(type='RC_CHANNELS',
-                                        blocking=True,
-                                        timeout=1)
-                if m is None:
-                    raise NotAchievedException("Did not get RC_CHANNELS")
+                m = self.assert_receive_message('RC_CHANNELS', timeout=1)
                 channel_field = "chan%u_raw" % ch
                 m_value = getattr(m, channel_field)
                 if m_value != ch_override_value:
@@ -2339,11 +2330,7 @@ Brakes have negligible effect (with=%0.2fm without=%0.2fm delta=%0.2fm)
 
     def assert_receive_mission_item_request(self, mission_type, seq):
         self.progress("Expecting request for item %u" % seq)
-        m = self.mav.recv_match(type='MISSION_REQUEST',
-                                blocking=True,
-                                timeout=1)
-        if m is None:
-            raise NotAchievedException("Did not get MISSION_REQUEST")
+        m = self.assert_receive_message('MISSION_REQUEST', timeout=1)
         if m.mission_type != mission_type:
             raise NotAchievedException("Incorrect mission type (wanted=%u got=%u)" %
                                        (mission_type, m.mission_type))
@@ -3164,11 +3151,7 @@ Brakes have negligible effect (with=%0.2fm without=%0.2fm delta=%0.2fm)
             mav2.mav.srcSystem = old_mav2_system
             mav2.mav.srcComponent = old_mav2_component
             # we continue to receive requests on the original link:
-            m = self.mav.recv_match(type='MISSION_REQUEST',
-                                    blocking=True,
-                                    timeout=1)
-            if m is None:
-                raise NotAchievedException("Did not get mission request")
+            m = self.assert_receive_message('MISSION_REQUEST', timeout=1)
             if m.mission_type != mavutil.mavlink.MAV_MISSION_TYPE_RALLY:
                 raise NotAchievedException("Mission request of incorrect type")
             if m.seq != 1:
@@ -3460,9 +3443,7 @@ Brakes have negligible effect (with=%0.2fm without=%0.2fm delta=%0.2fm)
         if self.get_parameter("MIS_TOTAL") != 0:
             raise NotAchievedException("Failed to clear mission")
         self.drain_mav_unparsed()
-        m = self.mav.recv_match(type='MISSION_CURRENT', blocking=True, timeout=5)
-        if m is None:
-            raise NotAchievedException("Did not get expected MISSION_CURRENT")
+        m = self.assert_receive_message('MISSION_CURRENT', timeout=5)
         if m.seq != 0:
             raise NotAchievedException("Bad mission current")
         self.load_mission_using_mavproxy(mavproxy, "rover-gripper-mission.txt")
@@ -3609,7 +3590,7 @@ Brakes have negligible effect (with=%0.2fm without=%0.2fm delta=%0.2fm)
             now = self.get_sim_time_cached()
             if now - tstart > timeout:
                 raise AutoTestTimeoutException("Did not get to location")
-            if now - last_sent > 1:
+            if now - last_sent > 10:
                 last_sent = now
                 self.mav.mav.set_position_target_global_int_send(
                     0,
@@ -3664,7 +3645,7 @@ Brakes have negligible effect (with=%0.2fm without=%0.2fm delta=%0.2fm)
             now = self.get_sim_time_cached()
             if now - tstart > timeout:
                 raise NotAchievedException("Did not breach boundary + RTL")
-            if now - last_sent > 1:
+            if now - last_sent > 10:
                 last_sent = now
                 self.mav.mav.set_position_target_global_int_send(
                     0,
@@ -3729,7 +3710,7 @@ Brakes have negligible effect (with=%0.2fm without=%0.2fm delta=%0.2fm)
             now = self.get_sim_time_cached()
             if now - tstart > timeout:
                 raise NotAchievedException("Did not arrive and stop at boundary")
-            if now - last_sent > 1:
+            if now - last_sent > 10:
                 last_sent = now
                 self.mav.mav.set_position_target_global_int_send(
                     0,
@@ -3774,11 +3755,7 @@ Brakes have negligible effect (with=%0.2fm without=%0.2fm delta=%0.2fm)
                         return
 
     def assert_fence_breached(self):
-        m = self.mav.recv_match(type='FENCE_STATUS',
-                                blocking=True,
-                                timeout=10)
-        if m is None:
-            raise NotAchievedException("Not receiving fence notifications?")
+        m = self.assert_receive_message('FENCE_STATUS', timeout=10)
         if m.breach_status != 1:
             raise NotAchievedException("Expected to be breached")
 
@@ -4714,9 +4691,7 @@ Brakes have negligible effect (with=%0.2fm without=%0.2fm delta=%0.2fm)
             self.arm_vehicle()
             self.set_rc(3, 1600)
 
-            m = self.mav.recv_match(type='WHEEL_DISTANCE', blocking=True, timeout=5)
-            if m is None:
-                raise NotAchievedException("Did not get WHEEL_DISTANCE")
+            m = self.assert_receive_message('WHEEL_DISTANCE', timeout=5)
 
             tstart = self.get_sim_time()
             while True:
@@ -5150,7 +5125,61 @@ Brakes have negligible effect (with=%0.2fm without=%0.2fm delta=%0.2fm)
         if ex is not None:
             raise ex
 
+    def test_scripting_print_home_and_origin(self):
+        self.start_subtest("Scripting print home and origin")
+
+        self.context_push()
+
+        ex = None
+        example_script = "ahrs-print-home-and-origin.lua"
+        try:
+            self.set_parameter("SCR_ENABLE", 1)
+            self.install_example_script(example_script)
+            self.reboot_sitl()
+            self.wait_ready_to_arm()
+            self.wait_statustext("Home - ")
+            self.wait_statustext("Origin - ")
+        except Exception as e:
+            self.print_exception_caught(e)
+            ex = e
+
+        self.remove_example_script(example_script)
+
+        self.context_pop()
+
+        self.reboot_sitl()
+
+        if ex is not None:
+            raise ex
+
+    def test_scripting_set_home_to_vehicle_location(self):
+        self.start_subtest("Scripting set home to vehicle location")
+
+        self.context_push()
+
+        ex = None
+        example_script = "ahrs-set-home-to-vehicle-location.lua"
+        try:
+            self.set_parameter("SCR_ENABLE", 1)
+            self.install_example_script(example_script)
+            self.reboot_sitl()
+            self.wait_statustext("Home position reset")
+        except Exception as e:
+            self.print_exception_caught(e)
+            ex = e
+
+        self.remove_example_script(example_script)
+
+        self.context_pop()
+
+        self.reboot_sitl()
+
+        if ex is not None:
+            raise ex
+
     def test_scripting(self):
+        self.test_scripting_set_home_to_vehicle_location()
+        self.test_scripting_print_home_and_origin()
         self.test_scripting_hello_world()
         self.test_scripting_simple_loop()
         self.test_scripting_internal_test()
@@ -5756,6 +5785,29 @@ Brakes have negligible effect (with=%0.2fm without=%0.2fm delta=%0.2fm)
         # make sure we're back at our original value:
         self.assert_parameter_value("LOG_BITMASK", 1)
 
+    def RangeFinder(self):
+        # the following magic numbers correspond to the post locations in SITL
+        home_string = "%s,%s,%s,%s" % (51.8752066, 14.6487840, 54.15, 315)
+
+        rangefinder_params = {
+            "SIM_SONAR_ROT": 6,
+        }
+        rangefinder_params.update(self.analog_rangefinder_parameters())
+
+        self.set_parameters(rangefinder_params)
+        self.customise_SITL_commandline([
+            "--home", home_string,
+        ])
+        self.wait_ready_to_arm()
+        if self.mavproxy is not None:
+            self.mavproxy.send('script /tmp/post-locations.scr\n')
+        m = self.assert_receive_message('RANGEFINDER', very_verbose=True)
+        if m.voltage == 0:
+            raise NotAchievedException("Did not get non-zero voltage")
+        want_range = 10
+        if abs(m.distance - want_range) > 0.1:
+            raise NotAchievedException("Expected %fm got %fm" % (want_range, m.distance))
+
     def test_depthfinder(self):
         # Setup rangefinders
         self.customise_SITL_commandline([
@@ -6053,6 +6105,10 @@ Brakes have negligible effect (with=%0.2fm without=%0.2fm delta=%0.2fm)
             ("AccelCal",
              "Accelerometer Calibration testing",
              self.accelcal),
+
+            ("RangeFinder",
+             "Test RangeFinder",
+             self.RangeFinder),
 
             ("AP_Proximity_MAV",
              "Test MAV proximity backend",

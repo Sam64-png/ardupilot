@@ -716,10 +716,10 @@ const AP_Param::Info Plane::var_info[] = {
 
     // @Param: RTL_AUTOLAND
     // @DisplayName: RTL auto land
-    // @Description: Automatically begin landing sequence after arriving at RTL location. This requires the addition of a DO_LAND_START mission item, which acts as a marker for the start of a landing sequence. The closest landing sequence will be chosen to the current location. 
-    // @Values: 0:Disable,1:Enable - go HOME then land,2:Enable - go directly to landing sequence
+    // @Description: Automatically begin landing sequence after arriving at RTL location. This requires the addition of a DO_LAND_START mission item, which acts as a marker for the start of a landing sequence. The closest landing sequence will be chosen to the current location. If this is set to 0 and there is a DO_LAND_START mission item then you will get an arming check failure. You can set to a value of 3 to avoid the arming check failure and use the DO_LAND_START for go-around without it changing RTL behaviour. For a value of 1 a rally point will be used instead of HOME if in range (see rally point documentation).
+    // @Values: 0:Disable,1:Fly HOME then land,2:Go directly to landing sequence, 3:OnlyForGoAround
     // @User: Standard
-    GSCALAR(rtl_autoland,         "RTL_AUTOLAND",   0),
+    GSCALAR(rtl_autoland,         "RTL_AUTOLAND",   float(RtlAutoland::RTL_DISABLE)),
 
     // @Param: CRASH_ACC_THRESH
     // @DisplayName: Crash Deceleration Threshold
@@ -924,7 +924,7 @@ const AP_Param::Info Plane::var_info[] = {
     GOBJECT(can_mgr,        "CAN_",       AP_CANManager),
 #endif
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
+#if AP_SIM_ENABLED
     // @Group: SIM_
     // @Path: ../libraries/SITL/SITL.cpp
     GOBJECT(sitl, "SIM_", SITL::SIM),
@@ -1229,6 +1229,12 @@ const AP_Param::GroupInfo ParametersG2::var_info[] = {
     // @User: Advanced
     // @Bitmask: 0: Servo 1, 1: Servo 2, 2: Servo 3, 3: Servo 4, 4: Servo 5, 5: Servo 6, 6: Servo 7, 7: Servo 8, 8: Servo 9, 9: Servo 10, 10: Servo 11, 11: Servo 12, 12: Servo 13, 13: Servo 14, 14: Servo 15
     AP_GROUPINFO("ONESHOT_MASK", 32, ParametersG2, oneshot_mask, 0),
+
+#if AP_SCRIPTING_ENABLED
+    // @Group: FOLL
+    // @Path: ../libraries/AP_Follow/AP_Follow.cpp
+    AP_SUBGROUPINFO(follow, "FOLL", 33, ParametersG2, AP_Follow),
+#endif
     
     AP_GROUPEND
 };
@@ -1358,9 +1364,6 @@ void Plane::load_parameters(void)
         
     SRV_Channels::upgrade_parameters();
 
-    // possibly convert elevon and vtail mixers
-    convert_mixers();
-
 #if HAL_QUADPLANE_ENABLED
     if (quadplane.enable) {
         // quadplanes needs a higher loop rate
@@ -1489,6 +1492,7 @@ void Plane::load_parameters(void)
     }
 #endif
 
+#if AP_AIRSPEED_ENABLED
     // PARAMETER_CONVERSION - Added: Jan-2022
     {
         const uint16_t old_key = g.k_param_airspeed;
@@ -1496,116 +1500,25 @@ void Plane::load_parameters(void)
         const uint16_t old_top_element = 0; // Old group element in the tree for the first subgroup element (see AP_PARAM_KEY_DUMP)
         AP_Param::convert_class(old_key, &airspeed, airspeed.var_info, old_index, old_top_element, true);
     }
+#endif
 
-    hal.console->printf("load_all took %uus\n", (unsigned)(micros() - before));
-}
-
-/*
-  convert from old ELEVON_OUTPUT and VTAIL_OUTPUT mixers to function
-  based mixing
- */
-void Plane::convert_mixers(void)
-{
-    AP_Int8 elevon_output;
-    AP_Int8 vtail_output;
-    AP_Param::ConversionInfo elevon_info = {
-        Parameters::k_param_elevon_output,
-        0,
-        AP_PARAM_INT8,
-        nullptr
-    };
-    AP_Param::ConversionInfo vtail_info = {
-        Parameters::k_param_vtail_output,
-        0,
-        AP_PARAM_INT8,
-        nullptr
-    };
-    SRV_Channel *chan1 = SRV_Channels::srv_channel(CH_1);
-    SRV_Channel *chan2 = SRV_Channels::srv_channel(CH_2);
-    SRV_Channel *chan4 = SRV_Channels::srv_channel(CH_4);
-
-    if (AP_Param::find_old_parameter(&vtail_info, &vtail_output) &&
-        vtail_output.get() != 0 &&
-        chan2->get_function() == SRV_Channel::k_elevator &&
-        chan4->get_function() == SRV_Channel::k_rudder &&
-        !chan2->function_configured() &&
-        !chan4->function_configured()) {
-        hal.console->printf("Converting vtail_output %u\n", vtail_output.get());
-        switch (vtail_output) {
-        case MIXING_UPUP:
-        case MIXING_UPUP_SWP:
-            chan2->reversed_set_and_save_ifchanged(false);
-            chan4->reversed_set_and_save_ifchanged(false);
-            break;
-        case MIXING_UPDN:
-        case MIXING_UPDN_SWP:
-            chan2->reversed_set_and_save_ifchanged(false);
-            chan4->reversed_set_and_save_ifchanged(true);
-            break;
-        case MIXING_DNUP:
-        case MIXING_DNUP_SWP:
-            chan2->reversed_set_and_save_ifchanged(true);
-            chan4->reversed_set_and_save_ifchanged(false);
-            break;
-        case MIXING_DNDN:
-        case MIXING_DNDN_SWP:
-            chan2->reversed_set_and_save_ifchanged(true);
-            chan4->reversed_set_and_save_ifchanged(true);
-            break;
+#if HAL_INS_NUM_HARMONIC_NOTCH_FILTERS > 1
+    if (!ins.harmonic_notches[1].params.enabled()) {
+        // notch filter parameter conversions (moved to INS_HNTC2) for 4.2.x, converted from fixed notch
+        const AP_Param::ConversionInfo notchfilt_conversion_info[] {
+            { Parameters::k_param_ins, 101, AP_PARAM_INT8,  "INS_HNTC2_ENABLE" },
+            { Parameters::k_param_ins, 293, AP_PARAM_FLOAT, "INS_HNTC2_ATT" },
+            { Parameters::k_param_ins, 357, AP_PARAM_FLOAT, "INS_HNTC2_FREQ" },
+            { Parameters::k_param_ins, 421, AP_PARAM_FLOAT, "INS_HNTC2_BW" },
+        };
+        uint8_t notchfilt_table_size = ARRAY_SIZE(notchfilt_conversion_info);
+        for (uint8_t i=0; i<notchfilt_table_size; i++) {
+            AP_Param::convert_old_parameters(&notchfilt_conversion_info[i], 1.0f);
         }
-        if (vtail_output < MIXING_UPUP_SWP) {
-            chan2->function_set_and_save(SRV_Channel::k_vtail_right);
-            chan4->function_set_and_save(SRV_Channel::k_vtail_left);
-        } else {
-            chan2->function_set_and_save(SRV_Channel::k_vtail_left);
-            chan4->function_set_and_save(SRV_Channel::k_vtail_right);
-        }
-    } else if (AP_Param::find_old_parameter(&elevon_info, &elevon_output) &&
-        elevon_output.get() != 0 &&
-        chan1->get_function() == SRV_Channel::k_aileron &&
-        chan2->get_function() == SRV_Channel::k_elevator &&
-        !chan1->function_configured() &&
-        !chan2->function_configured()) {
-        hal.console->printf("convert elevon_output %u\n", elevon_output.get());
-        switch (elevon_output) {
-        case MIXING_UPUP:
-        case MIXING_UPUP_SWP:
-            chan2->reversed_set_and_save_ifchanged(false);
-            chan1->reversed_set_and_save_ifchanged(false);
-            break;
-        case MIXING_UPDN:
-        case MIXING_UPDN_SWP:
-            chan2->reversed_set_and_save_ifchanged(false);
-            chan1->reversed_set_and_save_ifchanged(true);
-            break;
-        case MIXING_DNUP:
-        case MIXING_DNUP_SWP:
-            chan2->reversed_set_and_save_ifchanged(true);
-            chan1->reversed_set_and_save_ifchanged(false);
-            break;
-        case MIXING_DNDN:
-        case MIXING_DNDN_SWP:
-            chan2->reversed_set_and_save_ifchanged(true);
-            chan1->reversed_set_and_save_ifchanged(true);
-            break;
-        }
-        if (elevon_output < MIXING_UPUP_SWP) {
-            chan1->function_set_and_save(SRV_Channel::k_elevon_right);
-            chan2->function_set_and_save(SRV_Channel::k_elevon_left);
-        } else {
-            chan1->function_set_and_save(SRV_Channel::k_elevon_left);
-            chan2->function_set_and_save(SRV_Channel::k_elevon_right);
-        }
+        AP_Param::set_default_by_name("INS_HNTC2_MODE", 0);
+        AP_Param::set_default_by_name("INS_HNTC2_HMNCS", 1);
     }
-
-    // convert any k_aileron_with_input to aileron and k_elevator_with_input to k_elevator
-    for (uint8_t i=0; i<NUM_SERVO_CHANNELS; i++) {
-        SRV_Channel *chan = SRV_Channels::srv_channel(i);
-        if (chan->get_function() == SRV_Channel::k_aileron_with_input) {
-            chan->function_set_and_save(SRV_Channel::k_aileron);
-        } else if (chan->get_function() == SRV_Channel::k_elevator_with_input) {
-            chan->function_set_and_save(SRV_Channel::k_elevator);
-        }
-    }
+#endif // HAL_INS_NUM_HARMONIC_NOTCH_FILTERS
     
+    hal.console->printf("load_all took %uus\n", (unsigned)(micros() - before));
 }

@@ -18,6 +18,7 @@
 #include <AP_RCProtocol/AP_RCProtocol.h>
 #include <AP_InternalError/AP_InternalError.h>
 #include <AP_Logger/AP_Logger.h>
+#include <ch.h>
 
 extern const AP_HAL::HAL &hal;
 
@@ -957,7 +958,7 @@ bool AP_IOMCU::setup_mixing(RCMapper *rcmap, int8_t override_chan,
         MIX_UPDATE(mixing.rc_reversed[i], c->get_reverse());
 
         // cope with reversible throttle
-        if (i == 2 && c->get_type() == RC_Channel::RC_CHANNEL_TYPE_ANGLE) {
+        if (i == 2 && c->get_type() == RC_Channel::ControlType::ANGLE) {
             MIX_UPDATE(mixing.throttle_is_angle, 1);
         } else {
             MIX_UPDATE(mixing.throttle_is_angle, 0);
@@ -1063,22 +1064,25 @@ void AP_IOMCU::check_iomcu_reset(void)
     last_rc_protocols = 0;
 }
 
-// Check if pin number is valid for GPIO
+// Check if pin number is valid and configured for GPIO
 bool AP_IOMCU::valid_GPIO_pin(uint8_t pin) const
 {
-    return convert_pin_number(pin);
+    // sanity check pin number
+    if (!convert_pin_number(pin)) {
+        return false;
+    }
+
+    // check pin is enabled as GPIO
+    return ((GPIO.channel_mask & (1U << pin)) != 0);
 }
 
 // convert external pin numbers 101 to 108 to internal 0 to 7
 bool AP_IOMCU::convert_pin_number(uint8_t& pin) const
 {
-    if (pin < 101) {
+    if (pin < 101 || pin > 108) {
         return false;
     }
     pin -= 101;
-    if (pin > 7) {
-        return false;
-    }
     return true;
 }
 

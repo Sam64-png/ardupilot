@@ -418,6 +418,38 @@ bool Copter::set_circle_rate(float rate_dps)
     return true;
 }
 
+// returns true if mode supports NAV_SCRIPT_TIME mission commands
+bool Copter::nav_scripting_enable(uint8_t mode)
+{
+    return mode == (uint8_t)mode_auto.mode_number();
+}
+
+// lua scripts use this to retrieve the contents of the active command
+bool Copter::nav_script_time(uint16_t &id, uint8_t &cmd, float &arg1, float &arg2)
+{
+    if (flightmode != &mode_auto) {
+        return false;
+    }
+
+    return mode_auto.nav_script_time(id, cmd, arg1, arg2);
+}
+
+// lua scripts use this to indicate when they have complete the command
+void Copter::nav_script_time_done(uint16_t id)
+{
+    if (flightmode != &mode_auto) {
+        return;
+    }
+
+    return mode_auto.nav_script_time_done(id);
+}
+
+// returns true if the EKF failsafe has triggered.  Only used by Lua scripts
+bool Copter::has_ekf_failsafed() const
+{
+    return failsafe.ekf;
+}
+
 #endif // AP_SCRIPTING_ENABLED
 
 
@@ -511,10 +543,10 @@ void Copter::ten_hz_logging_loop()
     if (should_log(MASK_LOG_CTUN)) {
         attitude_control->control_monitor_log();
 #if HAL_PROXIMITY_ENABLED
-        logger.Write_Proximity(g2.proximity);  // Write proximity sensor distances
+        g2.proximity.log();  // Write proximity sensor distances
 #endif
 #if BEACON_ENABLED == ENABLED
-        logger.Write_Beacon(g2.beacon);
+        g2.beacon.log();
 #endif
     }
 #if FRAME_CONFIG == HELI_FRAME

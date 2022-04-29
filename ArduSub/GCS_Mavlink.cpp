@@ -154,7 +154,7 @@ void GCS_MAVLINK_Sub::send_pid_tuning()
 
     const Vector3f &gyro = ahrs.get_gyro();
     if (g.gcs_pid_mask & 1) {
-        const AP_Logger::PID_Info &pid_info = attitude_control.get_rate_roll_pid().get_pid_info();
+        const AP_PIDInfo &pid_info = attitude_control.get_rate_roll_pid().get_pid_info();
         mavlink_msg_pid_tuning_send(chan, PID_TUNING_ROLL,
                                     pid_info.target*0.01f,
                                     degrees(gyro.x),
@@ -169,7 +169,7 @@ void GCS_MAVLINK_Sub::send_pid_tuning()
         }
     }
     if (g.gcs_pid_mask & 2) {
-        const AP_Logger::PID_Info &pid_info = attitude_control.get_rate_pitch_pid().get_pid_info();
+        const AP_PIDInfo &pid_info = attitude_control.get_rate_pitch_pid().get_pid_info();
         mavlink_msg_pid_tuning_send(chan, PID_TUNING_PITCH,
                                     pid_info.target*0.01f,
                                     degrees(gyro.y),
@@ -184,7 +184,7 @@ void GCS_MAVLINK_Sub::send_pid_tuning()
         }
     }
     if (g.gcs_pid_mask & 4) {
-        const AP_Logger::PID_Info &pid_info = attitude_control.get_rate_yaw_pid().get_pid_info();
+        const AP_PIDInfo &pid_info = attitude_control.get_rate_yaw_pid().get_pid_info();
         mavlink_msg_pid_tuning_send(chan, PID_TUNING_YAW,
                                     pid_info.target*0.01f,
                                     degrees(gyro.z),
@@ -199,7 +199,7 @@ void GCS_MAVLINK_Sub::send_pid_tuning()
         }
     }
     if (g.gcs_pid_mask & 8) {
-        const AP_Logger::PID_Info &pid_info = sub.pos_control.get_accel_z_pid().get_pid_info();
+        const AP_PIDInfo &pid_info = sub.pos_control.get_accel_z_pid().get_pid_info();
         mavlink_msg_pid_tuning_send(chan, PID_TUNING_ACCZ,
                                     pid_info.target*0.01f,
                                     -(ahrs.get_accel_ef_blended().z + GRAVITY_MSS),
@@ -255,6 +255,7 @@ const AP_Param::GroupInfo GCS_MAVLINK_Parameters::var_info[] = {
     // @Units: Hz
     // @Range: 0 50
     // @Increment: 1
+    // @RebootRequired: True
     // @User: Advanced
     AP_GROUPINFO("RAW_SENS", 0, GCS_MAVLINK_Parameters, streamRates[GCS_MAVLINK::STREAM_RAW_SENSORS],  0),
 
@@ -264,6 +265,7 @@ const AP_Param::GroupInfo GCS_MAVLINK_Parameters::var_info[] = {
     // @Units: Hz
     // @Range: 0 50
     // @Increment: 1
+    // @RebootRequired: True
     // @User: Advanced
     AP_GROUPINFO("EXT_STAT", 1, GCS_MAVLINK_Parameters, streamRates[GCS_MAVLINK::STREAM_EXTENDED_STATUS],  0),
 
@@ -273,6 +275,7 @@ const AP_Param::GroupInfo GCS_MAVLINK_Parameters::var_info[] = {
     // @Units: Hz
     // @Range: 0 50
     // @Increment: 1
+    // @RebootRequired: True
     // @User: Advanced
     AP_GROUPINFO("RC_CHAN",  2, GCS_MAVLINK_Parameters, streamRates[GCS_MAVLINK::STREAM_RC_CHANNELS],  0),
 
@@ -282,6 +285,7 @@ const AP_Param::GroupInfo GCS_MAVLINK_Parameters::var_info[] = {
     // @Units: Hz
     // @Range: 0 50
     // @Increment: 1
+    // @RebootRequired: True
     // @User: Advanced
     AP_GROUPINFO("POSITION", 4, GCS_MAVLINK_Parameters, streamRates[GCS_MAVLINK::STREAM_POSITION],  0),
 
@@ -291,6 +295,7 @@ const AP_Param::GroupInfo GCS_MAVLINK_Parameters::var_info[] = {
     // @Units: Hz
     // @Range: 0 50
     // @Increment: 1
+    // @RebootRequired: True
     // @User: Advanced
     AP_GROUPINFO("EXTRA1",   5, GCS_MAVLINK_Parameters, streamRates[GCS_MAVLINK::STREAM_EXTRA1],  0),
 
@@ -300,6 +305,7 @@ const AP_Param::GroupInfo GCS_MAVLINK_Parameters::var_info[] = {
     // @Units: Hz
     // @Range: 0 50
     // @Increment: 1
+    // @RebootRequired: True
     // @User: Advanced
     AP_GROUPINFO("EXTRA2",   6, GCS_MAVLINK_Parameters, streamRates[GCS_MAVLINK::STREAM_EXTRA2],  0),
 
@@ -309,6 +315,7 @@ const AP_Param::GroupInfo GCS_MAVLINK_Parameters::var_info[] = {
     // @Units: Hz
     // @Range: 0 50
     // @Increment: 1
+    // @RebootRequired: True
     // @User: Advanced
     AP_GROUPINFO("EXTRA3",   7, GCS_MAVLINK_Parameters, streamRates[GCS_MAVLINK::STREAM_EXTRA3],  0),
 
@@ -318,6 +325,7 @@ const AP_Param::GroupInfo GCS_MAVLINK_Parameters::var_info[] = {
     // @Units: Hz
     // @Range: 0 50
     // @Increment: 1
+    // @RebootRequired: True
     // @User: Advanced
     AP_GROUPINFO("PARAMS",   8, GCS_MAVLINK_Parameters, streamRates[GCS_MAVLINK::STREAM_PARAMS],  0),
     AP_GROUPEND
@@ -405,16 +413,6 @@ const struct GCS_MAVLINK::stream_entries GCS_MAVLINK::all_stream_entries[] = {
 bool GCS_MAVLINK_Sub::handle_guided_request(AP_Mission::Mission_Command &cmd)
 {
     return sub.do_guided(cmd);
-}
-
-void GCS_MAVLINK_Sub::handle_change_alt_request(AP_Mission::Mission_Command &cmd)
-{
-    // add home alt if needed
-    if (cmd.content.location.relative_alt) {
-        cmd.content.location.alt += sub.ahrs.get_home().alt;
-    }
-
-    // To-Do: update target altitude for loiter or waypoint controller depending upon nav mode
 }
 
 MAV_RESULT GCS_MAVLINK_Sub::_handle_command_preflight_calibration_baro()
@@ -624,9 +622,6 @@ void GCS_MAVLINK_Sub::handleMessage(const mavlink_message_t &msg)
                     packet.coordinate_frame == MAV_FRAME_BODY_NED ||
                     packet.coordinate_frame == MAV_FRAME_BODY_OFFSET_NED) {
                 pos_vector += sub.inertial_nav.get_position_neu_cm();
-            } else {
-                // convert from alt-above-home to alt-above-ekf-origin
-                pos_vector.z = sub.pv_alt_above_origin(pos_vector.z);
             }
         }
 
@@ -723,6 +718,8 @@ void GCS_MAVLINK_Sub::handleMessage(const mavlink_message_t &msg)
         break;
 
     case MAVLINK_MSG_ID_SET_HOME_POSITION: {
+        send_received_message_deprecation_warning(STR_VALUE(MAVLINK_MSG_ID_SET_HOME_POSITION));
+
         mavlink_set_home_position_t packet;
         mavlink_msg_set_home_position_decode(&msg, &packet);
         if ((packet.latitude == 0) && (packet.longitude == 0) && (packet.altitude == 0)) {
@@ -737,9 +734,7 @@ void GCS_MAVLINK_Sub::handleMessage(const mavlink_message_t &msg)
             if (sub.far_from_EKF_origin(new_home_loc)) {
                 break;
             }
-            if (!sub.set_home(new_home_loc, true)) {
-                // silently ignored
-            }
+            IGNORE_RETURN(sub.set_home(new_home_loc, true));
         }
         break;
     }

@@ -8,6 +8,7 @@
 #include <getopt.h>
 
 char keyword_alias[]               = "alias";
+char keyword_rename[]              = "rename";
 char keyword_ap_object[]           = "ap_object";
 char keyword_comment[]             = "--";
 char keyword_depends[]             = "depends";
@@ -55,6 +56,7 @@ enum error_codes {
   ERROR_GENERAL         = 6, // general error
   ERROR_SINGLETON       = 7, // singletons
   ERROR_DEPENDS         = 8, // dependencies
+  ERROR_DOCS            = 9, // Documentation
 };
 
 struct header {
@@ -336,17 +338,24 @@ struct method {
   struct method * next;
   char *name;
   char *sanatized_name;  // sanatized name of the C++ singleton
-  char *alias; // (optional) used for scripting access
+  char *rename; // (optional) used for scripting access
   int line; // line declared on
   struct type return_type;
   struct argument * arguments;
   uint32_t flags; // filled out with TYPE_FLAGS
 };
 
+struct method_alias {
+  struct method_alias *next;
+  char *name;
+  char *alias;
+  int line;
+};
+
 struct userdata_field {
   struct userdata_field * next;
   char * name;
-  char * alias;
+  char * rename;
   struct type type; // field type, points to a string
   int line; // line declared on
   unsigned int access_flags;
@@ -370,9 +379,10 @@ struct userdata {
   struct userdata * next;
   char *name;  // name of the C++ singleton
   char *sanatized_name;  // sanatized name of the C++ singleton
-  char *alias; // (optional) used for scripting access
+  char *rename; // (optional) used for scripting access
   struct userdata_field *fields;
   struct method *methods;
+  struct method_alias *method_aliases;
   struct userdata_enum *enums;
   enum userdata_type ud_type;
   uint32_t operations; // bitset of enum operation_types
@@ -562,8 +572,8 @@ int parse_type(struct type *type, const uint32_t restrictions, enum range_check_
     string_copy(&(type->data.enum_name), data_type);
   } else if (type->type == TYPE_LITERAL) {
     string_copy(&(type->data.literal), data_type);
-  } else if (strcmp(data_type, keyword_alias) == 0) {
-    error(ERROR_USERDATA, "Cant add alias to unknown function");
+  } else if (strcmp(data_type, keyword_rename) == 0) {
+    error(ERROR_USERDATA, "Cant add rename to unknown function");
   } else {
     // this must be a user data or an ap_object, check if it's already been declared as an object
     struct userdata *node = parsed_ap_objects;
@@ -671,11 +681,11 @@ void handle_userdata_field(struct userdata *data) {
   }
   if (field != NULL) {
     char *token = next_token();
-    if (strcmp(token, keyword_alias) != 0) {
+    if (strcmp(token, keyword_rename) != 0) {
       error(ERROR_USERDATA, "Field %s already exists in userdata %s (declared on %d)", field_name, data->name, field->line);
     }
-    char *alias = next_token();
-    string_copy(&(field->alias), alias);
+    char *rename = next_token();
+    string_copy(&(field->rename), rename);
     return;
   }
 
@@ -700,8 +710,9 @@ void handle_userdata_field(struct userdata *data) {
   field->access_flags = parse_access_flags(&(field->type));
 }
 
-void handle_method(char *parent_name, struct method **methods) {
+void handle_method(struct userdata *node) {
   trace(TRACE_USERDATA, "Adding a method");
+  char * parent_name = node->name;
 
   // find the field name
   char * name = next_token();
@@ -709,24 +720,52 @@ void handle_method(char *parent_name, struct method **methods) {
     error(ERROR_USERDATA, "Missing method name for %s", parent_name);
   }
   
-  struct method * method = *methods;
+  struct method * method = node->methods;
   while (method != NULL && strcmp(method->name, name)) {
     method = method-> next;
   }
   if (method != NULL) {
     char *token = next_token();
-    if (strcmp(token, keyword_alias) != 0) {
-      error(ERROR_USERDATA, "Method %s already exists for %s (declared on %d)", name, parent_name, method->line);
+    if (strcmp(token, keyword_rename) == 0) {
+      char *rename = next_token();
+      string_copy(&(method->rename), rename);
+      return;
+
+    } else if (strcmp(token, keyword_alias) == 0) {
+      char *alias_name = next_token();
+
+      struct method * method = node->methods;
+      while (method != NULL && strcmp(method->name, alias_name)) {
+        method = method-> next;
+      }
+      if (method != NULL) {
+        error(ERROR_USERDATA, "Method %s already exists for %s (declared on %d) cannot alias to %s", alias_name, parent_name, method->line, name);
+      }
+
+
+      struct method_alias *alias = allocate(sizeof(struct method_alias));
+      string_copy(&(alias->name), name);
+      string_copy(&(alias->alias), alias_name);
+      alias->line = state.line_num;
+      alias->next = node->method_aliases;
+      node->method_aliases = alias;
+      return;
     }
-    char *alias = next_token();
-    string_copy(&(method->alias), alias);
-    return;
+    error(ERROR_USERDATA, "Method %s already exists for %s (declared on %d)", name, parent_name, method->line);
+  }
+
+  struct method_alias * alias = node->method_aliases;
+  while (alias != NULL && strcmp(alias->alias, name)) {
+    alias = alias-> next;
+  }
+  if (alias != NULL) {
+    error(ERROR_USERDATA, "alias %s already exists for %s (declared on %d)", name, alias->name, alias->line);
   }
 
   trace(TRACE_USERDATA, "Adding method %s", name);
   method = allocate(sizeof(struct method));
-  method->next = *methods;
-  *methods = method;
+  method->next = node->methods;
+  node->methods = method;
   string_copy(&(method->name), name);
   sanatize_name(&(method->sanatized_name), name);
   method->line = state.line_num;
@@ -830,7 +869,7 @@ void handle_userdata(void) {
     node->next = parsed_userdata;
     parsed_userdata = node;
   } else {
-    trace(TRACE_USERDATA, "Found exsisting userdata for %s", name);
+    trace(TRACE_USERDATA, "Found existing userdata for %s", name);
   }
 
   // read type
@@ -845,16 +884,16 @@ void handle_userdata(void) {
   } else if (strcmp(type, keyword_operator) == 0) {
     handle_operator(node);
   } else if (strcmp(type, keyword_method) == 0) {
-    handle_method(node->name, &(node->methods));
+    handle_method(node);
   } else if (strcmp(type, keyword_enum) == 0) {
     handle_userdata_enum(node);
-  } else if (strcmp(type, keyword_alias) == 0) {
-    const char *alias = next_token();
-    if (alias == NULL) {
-      error(ERROR_SINGLETON, "Missing the name of the alias for userdata %s", node->name);
+  } else if (strcmp(type, keyword_rename) == 0) {
+    const char *rename = next_token();
+    if (rename == NULL) {
+      error(ERROR_SINGLETON, "Missing the name of the rename for userdata %s", node->name);
     }
-    node->alias = (char *)allocate(strlen(alias) + 1);
-    strcpy(node->alias, alias);
+    node->rename = (char *)allocate(strlen(rename) + 1);
+    strcpy(node->rename, rename);
 
   } else if (strcmp(type, keyword_depends) == 0) {
       if (node->dependency != NULL) {
@@ -904,16 +943,16 @@ void handle_singleton(void) {
     error(ERROR_SINGLETON, "Expected a access type for userdata %s", name);
   }
 
-  if (strcmp(type, keyword_alias) == 0) {
-    if (node->alias != NULL) {
-      error(ERROR_SINGLETON, "Alias of %s was already declared for %s", node->alias, node->name);
+  if (strcmp(type, keyword_rename) == 0) {
+    if (node->rename != NULL) {
+      error(ERROR_SINGLETON, "rename of %s was already declared for %s", node->rename, node->name);
     }
-    const char *alias = next_token();
-    if (alias == NULL) {
-      error(ERROR_SINGLETON, "Missing the name of the alias for %s", node->name);
+    const char *rename = next_token();
+    if (rename == NULL) {
+      error(ERROR_SINGLETON, "Missing the name of the rename for %s", node->name);
     }
-    node->alias = (char *)allocate(strlen(alias) + 1);
-    strcpy(node->alias, alias);
+    node->rename = (char *)allocate(strlen(rename) + 1);
+    strcpy(node->rename, rename);
 
   } else if (strcmp(type, keyword_semaphore) == 0) {
     node->flags |= UD_FLAG_SEMAPHORE;
@@ -922,7 +961,7 @@ void handle_singleton(void) {
   } else if (strcmp(type, keyword_semaphore_pointer) == 0) {
     node->flags |= UD_FLAG_SCHEDULER_SEMAPHORE;
   } else if (strcmp(type, keyword_method) == 0) {
-    handle_method(node->name, &(node->methods));
+    handle_method(node);
   } else if (strcmp(type, keyword_enum) == 0) {
     handle_userdata_enum(node);
   } else if (strcmp(type, keyword_depends) == 0) {
@@ -941,7 +980,7 @@ void handle_singleton(void) {
   } else if (strcmp(type, keyword_reference) == 0) {
     node->flags |= UD_FLAG_REFERENCE;
   } else {
-    error(ERROR_SINGLETON, "Singletons only support aliases, methods, semaphore, depends or literal keywords (got %s)", type);
+    error(ERROR_SINGLETON, "Singletons only support renames, methods, semaphore, depends or literal keywords (got %s)", type);
   }
 
   // ensure no more tokens on the line
@@ -980,16 +1019,16 @@ void handle_ap_object(void) {
     error(ERROR_SINGLETON, "Expected a access type for ap_object %s", name);
   }
 
-  if (strcmp(type, keyword_alias) == 0) {
-    if (node->alias != NULL) {
-      error(ERROR_SINGLETON, "Alias of %s was already declared for %s", node->alias, node->name);
+  if (strcmp(type, keyword_rename) == 0) {
+    if (node->rename != NULL) {
+      error(ERROR_SINGLETON, "Rename of %s was already declared for %s", node->rename, node->name);
     }
-    const char *alias = next_token();
-    if (alias == NULL) {
-      error(ERROR_SINGLETON, "Missing the name of the alias for %s", node->name);
+    const char *rename = next_token();
+    if (rename == NULL) {
+      error(ERROR_SINGLETON, "Missing the name of the rename for %s", node->name);
     }
-    node->alias = (char *)allocate(strlen(alias) + 1);
-    strcpy(node->alias, alias);
+    node->rename = (char *)allocate(strlen(rename) + 1);
+    strcpy(node->rename, rename);
 
   } else if (strcmp(type, keyword_semaphore) == 0) {
     node->flags |= UD_FLAG_SEMAPHORE;
@@ -998,7 +1037,7 @@ void handle_ap_object(void) {
   } else if (strcmp(type, keyword_semaphore_pointer) == 0) {
     node->flags |= UD_FLAG_SEMAPHORE_POINTER;
   } else if (strcmp(type, keyword_method) == 0) {
-    handle_method(node->name, &(node->methods));
+    handle_method(node);
   } else if (strcmp(type, keyword_depends) == 0) {
       if (node->dependency != NULL) {
         error(ERROR_SINGLETON, "AP_Objects only support a single depends");
@@ -1010,7 +1049,7 @@ void handle_ap_object(void) {
       string_copy(&(node->dependency), depends);
 
   } else {
-    error(ERROR_SINGLETON, "AP_Objects only support aliases, methods or semaphore keyowrds (got %s)", type);
+    error(ERROR_SINGLETON, "AP_Objects only support renames, methods or semaphore keyowrds (got %s)", type);
   }
 
   // check that we didn't just add 2 singleton flags
@@ -1068,7 +1107,7 @@ void emit_userdata_allocators(void) {
     fprintf(source, "    void *ud = lua_newuserdata(L, sizeof(%s));\n", node->name);
     fprintf(source, "    memset(ud, 0, sizeof(%s));\n", node->name);
     fprintf(source, "    new (ud) %s();\n", node->name);
-    fprintf(source, "    luaL_getmetatable(L, \"%s\");\n", node->alias ? node->alias :  node->name);
+    fprintf(source, "    luaL_getmetatable(L, \"%s\");\n", node->rename ? node->rename :  node->name);
     fprintf(source, "    lua_setmetatable(L, -2);\n");
     fprintf(source, "    return 1;\n");
     fprintf(source, "}\n");
@@ -1101,7 +1140,7 @@ void emit_userdata_checkers(void) {
   while (node) {
     start_dependency(source, node->dependency);
     fprintf(source, "%s * check_%s(lua_State *L, int arg) {\n", node->name, node->sanatized_name);
-    fprintf(source, "    void *data = luaL_checkudata(L, arg, \"%s\");\n",  node->alias ? node->alias :  node->name);
+    fprintf(source, "    void *data = luaL_checkudata(L, arg, \"%s\");\n",  node->rename ? node->rename :  node->name);
     fprintf(source, "    return (%s *)data;\n", node->name);
     fprintf(source, "}\n");
     end_dependency(source, node->dependency);
@@ -1465,7 +1504,7 @@ void emit_singleton_field(const struct userdata *data, const struct userdata_fie
       // fetch and check the singleton pointer
       fprintf(source, "    %s * ud = %s::get_singleton();\n", data->name, data->name);
       fprintf(source, "    if (ud == nullptr) {\n");
-      fprintf(source, "        return not_supported_error(L, %d, \"%s\");\n", 1, data->alias ? data->alias : data->name);
+      fprintf(source, "        return not_supported_error(L, %d, \"%s\");\n", 1, data->rename ? data->rename : data->name);
       fprintf(source, "    }\n\n");
   }
   const char *ud_name = (data->flags & UD_FLAG_LITERAL)?data->name:"ud";
@@ -1611,7 +1650,7 @@ void emit_userdata_method(const struct userdata *data, const struct method *meth
 
   start_dependency(source, data->dependency);
 
-  const char *access_name = data->alias ? data->alias : data->name;
+  const char *access_name = data->rename ? data->rename : data->name;
   // bind ud early if it's a singleton, so that we can use it in the range checks
   fprintf(source, "static int %s_%s(lua_State *L) {\n", data->sanatized_name, method->sanatized_name);
   // emit comments on expected arg/type
@@ -1936,7 +1975,7 @@ void emit_operators(struct userdata *data) {
     fprintf(source, "    %s *ud2 = check_%s(L, 2);\n", data->name, data->sanatized_name);
     // create a container for the result
     fprintf(source, "    new_%s(L);\n", data->sanatized_name);
-    fprintf(source, "    *check_%s(L, -1) = *ud %c *ud2;;\n", data->sanatized_name, op_sym);
+    fprintf(source, "    *check_%s(L, -1) = *ud %c *ud2;\n", data->sanatized_name, op_sym);
     // return the first pointer
     fprintf(source, "    return 1;\n");
     fprintf(source, "}\n\n");
@@ -1944,7 +1983,7 @@ void emit_operators(struct userdata *data) {
   }
 }
 
-void emit_userdata_methods(struct userdata *node) {
+void emit_methods(struct userdata *node) {
   while(node) {
     // methods
     struct method *method = node->methods;
@@ -1969,13 +2008,13 @@ void emit_userdata_metatables(void) {
 
     struct userdata_field *field = node->fields;
     while(field) {
-      fprintf(source, "    {\"%s\", %s_%s},\n", field->alias ? field->alias : field->name, node->sanatized_name, field->name);
+      fprintf(source, "    {\"%s\", %s_%s},\n", field->rename ? field->rename : field->name, node->sanatized_name, field->name);
       field = field->next;
     }
 
     struct method *method = node->methods;
     while(method) {
-      fprintf(source, "    {\"%s\", %s_%s},\n", method->alias ? method->alias :  method->name, node->sanatized_name, method->sanatized_name);
+      fprintf(source, "    {\"%s\", %s_%s},\n", method->rename ? method->rename :  method->name, node->sanatized_name, method->sanatized_name);
       method = method->next;
     }
 
@@ -1995,59 +2034,97 @@ void emit_userdata_metatables(void) {
   }
 }
 
-void emit_singleton_metatables(struct userdata *head) {
+void emit_enum(struct userdata * data) {
+    fprintf(source, "struct userdata_enum %s_enums[] = {\n", data->sanatized_name);
+    struct userdata_enum *ud_enum = data->enums;
+    while (ud_enum != NULL) {
+      fprintf(source, "    {\"%s\", %s::%s},\n", ud_enum->name, data->name, ud_enum->name);
+      ud_enum = ud_enum->next;
+    }
+    fprintf(source, "};\n\n");
+}
+
+void emit_index(struct userdata *head) {
+
   struct userdata * node = head;
   while(node) {
     start_dependency(source, node->dependency);
+
     fprintf(source, "const luaL_Reg %s_meta[] = {\n", node->sanatized_name);
 
     struct method *method = node->methods;
     while (method) {
-      fprintf(source, "    {\"%s\", %s_%s},\n", method->alias ? method->alias :  method->name, node->sanatized_name, method->name);
+      fprintf(source, "    {\"%s\", %s_%s},\n", method->rename ? method->rename :  method->name, node->sanatized_name, method->name);
       method = method->next;
     }
 
     struct userdata_field *field = node->fields;
     while(field) {
-      fprintf(source, "    {\"%s\", %s_%s},\n", field->alias ? field->alias : field->name, node->sanatized_name, field->name);
+      fprintf(source, "    {\"%s\", %s_%s},\n", field->rename ? field->rename : field->name, node->sanatized_name, field->name);
       field = field->next;
     }
 
-    fprintf(source, "    {NULL, NULL}\n");
-    fprintf(source, "};\n");
+    struct method_alias *alias = node->method_aliases;
+    while(alias) {
+      fprintf(source, "    {\"%s\", %s_%s},\n", alias->alias, node->sanatized_name, alias->name);
+      alias = alias->next;
+    }
+
+    fprintf(source, "};\n\n");
+
+    if (node->operations) {
+      fprintf(source, "const luaL_Reg %s_operators[] = {\n", node->sanatized_name);
+      for (uint32_t i = 1; i < OP_LAST; i = (i << 1)) {
+        const char * op_name = get_name_for_operation((node->operations) & i);
+        if (op_name == NULL) {
+          continue;
+        }
+        fprintf(source, "    {\"%s\", %s_%s},\n", op_name, node->sanatized_name, op_name);
+      }
+      fprintf(source, "    {NULL, NULL},\n");
+      fprintf(source, "};\n\n");
+    }
+
+    if (node->enums != NULL) {
+      emit_enum(node);
+    }
+
+    fprintf(source, "static int %s_index(lua_State *L) {\n", node->sanatized_name);
+    fprintf(source, "    const char * name = luaL_checkstring(L, 2);\n");
+    fprintf(source, "    if (load_function(L,%s_meta,ARRAY_SIZE(%s_meta),name)",node->sanatized_name,node->sanatized_name);
+    if (node->enums != NULL) {
+      fprintf(source, " || load_enum(L,%s_enums,ARRAY_SIZE(%s_enums),name)",node->sanatized_name,node->sanatized_name);
+    }
+    fprintf(source, ") {\n");
+    fprintf(source, "        return 1;\n");
+    fprintf(source, "    }\n");
+    fprintf(source, "    return 0;\n");
+    fprintf(source, "}\n");
     end_dependency(source, node->dependency);
     fprintf(source, "\n");
-
     node = node->next;
   }
 }
 
-void emit_enums(struct userdata * data) {
+void emit_type_index(struct userdata * data, char * meta_name) {
+  fprintf(source, "const struct luaL_Reg %s_fun[] = {\n", meta_name);
   while (data) {
-    if (data->enums != NULL) {
-      start_dependency(source, data->dependency);
-      fprintf(source, "struct userdata_enum %s_enums[] = {\n", data->sanatized_name);
-      struct userdata_enum *ud_enum = data->enums;
-      while (ud_enum != NULL) {
-        fprintf(source, "    {\"%s\", %s::%s},\n", ud_enum->name, data->name, ud_enum->name);
-        ud_enum = ud_enum->next;
-      }
-      fprintf(source, "    {NULL, 0}};\n");
-      end_dependency(source, data->dependency);
-      fprintf(source, "\n");
-    }
+    start_dependency(source, data->dependency);
+    fprintf(source, "    {\"%s\", %s_index},\n", data->rename ? data->rename : data->name, data->sanatized_name);
+    end_dependency(source, data->dependency);
     data = data->next;
   }
+  fprintf(source, "};\n\n");
 }
 
-void emit_metas(struct userdata * data, char * meta_name) {
+void emit_type_index_with_operators(struct userdata * data, char * meta_name) {
   fprintf(source, "const struct userdata_meta %s_fun[] = {\n", meta_name);
   while (data) {
     start_dependency(source, data->dependency);
-    if (data->enums) {
-      fprintf(source, "    {\"%s\", %s_meta, %s_enums},\n", data->alias ? data->alias : data->name, data->name, data->sanatized_name);
+    if (data->operations == 0) {
+      fprintf(source, "    {\"%s\", %s_index, nullptr},\n", data->rename ? data->rename : data->name, data->sanatized_name);
     } else {
-      fprintf(source, "    {\"%s\", %s_meta, NULL},\n", data->alias ? data->alias : data->name, data->sanatized_name);
+      fprintf(source, "    {\"%s\", %s_index, %s_operators},\n", data->rename ? data->rename : data->name, data->sanatized_name, data->sanatized_name);
     }
     end_dependency(source, data->dependency);
     data = data->next;
@@ -2056,65 +2133,60 @@ void emit_metas(struct userdata * data, char * meta_name) {
 }
 
 void emit_loaders(void) {
-  // emit the enum header
-  fprintf(source, "struct userdata_enum {\n");
-  fprintf(source, "    const char *name;\n");
-  fprintf(source, "    int value;\n");
-  fprintf(source, "};\n\n");
-  emit_enums(parsed_userdata);
-  emit_enums(parsed_singletons);
 
-  // emit the meta table header
-  fprintf(source, "struct userdata_meta {\n");
-  fprintf(source, "    const char *name;\n");
-  fprintf(source, "    const luaL_Reg *reg;\n");
-  fprintf(source, "    const struct userdata_enum *enums;\n");
-  fprintf(source, "};\n\n");
-  emit_metas(parsed_userdata, "userdata");
-  emit_metas(parsed_singletons, "singleton");
-  emit_metas(parsed_ap_objects, "ap_object");
+  emit_type_index_with_operators(parsed_userdata, "userdata");
+  emit_type_index(parsed_singletons, "singleton");
+  emit_type_index(parsed_ap_objects, "ap_object");
 
   fprintf(source, "void load_generated_bindings(lua_State *L) {\n");
   fprintf(source, "    luaL_checkstack(L, 5, \"Out of stack\");\n"); // this is more stack space then we need, but should never fail
   fprintf(source, "    // userdata metatables\n");
   fprintf(source, "    for (uint32_t i = 0; i < ARRAY_SIZE(userdata_fun); i++) {\n");
   fprintf(source, "        luaL_newmetatable(L, userdata_fun[i].name);\n");
-  fprintf(source, "        luaL_setfuncs(L, userdata_fun[i].reg, 0);\n");
-  fprintf(source, "        lua_pushstring(L, \"__index\");\n");
+  fprintf(source, "        lua_pushcclosure(L, userdata_fun[i].func, 0);\n");
+  fprintf(source, "        lua_setfield(L, -2, \"__index\");\n");
+
+  fprintf(source, "        if (userdata_fun[i].operators != nullptr) {\n");
+  fprintf(source, "            luaL_setfuncs(L, userdata_fun[i].operators, 0);\n");
+  fprintf(source, "        }\n");
+
+  fprintf(source, "        lua_pushstring(L, \"__call\");\n");
   fprintf(source, "        lua_pushvalue(L, -2);\n");
   fprintf(source, "        lua_settable(L, -3);\n");
+
   fprintf(source, "        lua_pop(L, 1);\n");
+  fprintf(source, "        lua_newuserdata(L, 0);\n");
+  fprintf(source, "        luaL_getmetatable(L, userdata_fun[i].name);\n");
+  fprintf(source, "        lua_setmetatable(L, -2);\n");
+  fprintf(source, "        lua_setglobal(L, userdata_fun[i].name);\n");
   fprintf(source, "    }\n");
   fprintf(source, "\n");
 
   fprintf(source, "    // ap object metatables\n");
   fprintf(source, "    for (uint32_t i = 0; i < ARRAY_SIZE(ap_object_fun); i++) {\n");
   fprintf(source, "        luaL_newmetatable(L, ap_object_fun[i].name);\n");
-  fprintf(source, "        luaL_setfuncs(L, ap_object_fun[i].reg, 0);\n");
-  fprintf(source, "        lua_pushstring(L, \"__index\");\n");
+  fprintf(source, "        lua_pushcclosure(L, ap_object_fun[i].func, 0);\n");
+  fprintf(source, "        lua_setfield(L, -2, \"__index\");\n");
+  fprintf(source, "        lua_pushstring(L, \"__call\");\n");
   fprintf(source, "        lua_pushvalue(L, -2);\n");
   fprintf(source, "        lua_settable(L, -3);\n");
+
   fprintf(source, "        lua_pop(L, 1);\n");
+  fprintf(source, "        lua_newuserdata(L, 0);\n");
+  fprintf(source, "        luaL_getmetatable(L, ap_object_fun[i].name);\n");
+  fprintf(source, "        lua_setmetatable(L, -2);\n");
+  fprintf(source, "        lua_setglobal(L, ap_object_fun[i].name);\n");
   fprintf(source, "    }\n");
   fprintf(source, "\n");
 
   fprintf(source, "    // singleton metatables\n");
   fprintf(source, "    for (uint32_t i = 0; i < ARRAY_SIZE(singleton_fun); i++) {\n");
   fprintf(source, "        luaL_newmetatable(L, singleton_fun[i].name);\n");
-  fprintf(source, "        luaL_setfuncs(L, singleton_fun[i].reg, 0);\n");
-  fprintf(source, "        lua_pushstring(L, \"__index\");\n");
+  fprintf(source, "        lua_pushcclosure(L, singleton_fun[i].func, 0);\n");
+  fprintf(source, "        lua_setfield(L, -2, \"__index\");\n");
+  fprintf(source, "        lua_pushstring(L, \"__call\");\n");
   fprintf(source, "        lua_pushvalue(L, -2);\n");
   fprintf(source, "        lua_settable(L, -3);\n");
-
-  fprintf(source, "        if (singleton_fun[i].enums != nullptr) {\n");
-  fprintf(source, "            int j = 0;\n");
-  fprintf(source, "            while (singleton_fun[i].enums[j].name != NULL) {\n");
-  fprintf(source, "                lua_pushstring(L, singleton_fun[i].enums[j].name);\n");
-  fprintf(source, "                lua_pushinteger(L, singleton_fun[i].enums[j].value);\n");
-  fprintf(source, "                lua_settable(L, -3);\n");
-  fprintf(source, "                j++;\n");
-  fprintf(source, "            }\n");
-  fprintf(source, "        }\n");
 
   fprintf(source, "        lua_pop(L, 1);\n");
   fprintf(source, "        lua_newuserdata(L, 0);\n");
@@ -2130,16 +2202,6 @@ void emit_loaders(void) {
 }
 
 void emit_sandbox(void) {
-  struct userdata *single = parsed_singletons;
-  fprintf(source, "const char *singletons[] = {\n");
-  while (single) {
-    start_dependency(source, single->dependency);
-    fprintf(source, "    \"%s\",\n", single->alias ? single->alias : single->sanatized_name);
-    end_dependency(source, single->dependency);
-    single = single->next;
-  }
-  fprintf(source, "};\n\n");
-
   struct userdata *data = parsed_userdata;
   fprintf(source, "const struct userdata {\n");
   fprintf(source, "    const char *name;\n");
@@ -2147,7 +2209,7 @@ void emit_sandbox(void) {
   fprintf(source, "} new_userdata[] = {\n");
   while (data) {
     start_dependency(source, data->dependency);
-    fprintf(source, "    {\"%s\", new_%s},\n", data->alias ? data->alias :  data->name, data->sanatized_name);
+    fprintf(source, "    {\"%s\", new_%s},\n", data->rename ? data->rename :  data->name, data->sanatized_name);
     end_dependency(source, data->dependency);
     data = data->next;
   }
@@ -2162,9 +2224,9 @@ void emit_sandbox(void) {
 
   fprintf(source, "void load_generated_sandbox(lua_State *L) {\n");
   // load the singletons
-  fprintf(source, "    for (uint32_t i = 0; i < ARRAY_SIZE(singletons); i++) {\n");
-  fprintf(source, "        lua_pushstring(L, singletons[i]);\n");
-  fprintf(source, "        lua_getglobal(L, singletons[i]);\n");
+  fprintf(source, "    for (uint32_t i = 0; i < ARRAY_SIZE(singleton_fun); i++) {\n");
+  fprintf(source, "        lua_pushstring(L, singleton_fun[i].name);\n");
+  fprintf(source, "        lua_getglobal(L, singleton_fun[i].name);\n");
   fprintf(source, "        lua_settable(L, -3);\n");
   fprintf(source, "    }\n");
 
@@ -2227,7 +2289,7 @@ void emit_docs_type(struct type type, const char *prefix, const char *suffix) {
       fprintf(docs, "%s uint32_t_ud%s", prefix, suffix);
       break;
     case TYPE_USERDATA: {
-      // userdata may have alias
+      // userdata may have rename
       struct userdata *data = parsed_userdata;
       int found = 0;
       while (data) {
@@ -2240,7 +2302,7 @@ void emit_docs_type(struct type type, const char *prefix, const char *suffix) {
       if (found == 0) {
         error(ERROR_GENERAL, "Could not find userdata %s", type.data.ud.sanatized_name);
       }
-      fprintf(docs, "%s %s_ud%s", prefix, data->alias ? data->alias : data->sanatized_name, suffix);
+      fprintf(docs, "%s %s_ud%s", prefix, data->rename ? data->rename : data->sanatized_name, suffix);
       break;
     }
     case TYPE_AP_OBJECT:
@@ -2252,13 +2314,60 @@ void emit_docs_type(struct type type, const char *prefix, const char *suffix) {
   }
 }
 
+void emit_docs_method(const char *name, const char *method_name, struct method *method) {
+
+  fprintf(docs, "-- desc\n");
+
+  struct argument *arg = method->arguments;
+  int count = 1;
+  // input arguments
+  while (arg != NULL) {
+    if ((arg->type.type != TYPE_LITERAL) && (arg->type.flags & (TYPE_FLAGS_NULLABLE | TYPE_FLAGS_REFERNCE)) == 0) {
+      char *param_name = (char *)allocate(20);
+      sprintf(param_name, "---@param param%i", count);
+      emit_docs_type(arg->type, param_name, "\n");
+      free(param_name);
+      count++;
+    }
+    arg = arg->next;
+  }
+
+  // return type
+  if ((method->flags & TYPE_FLAGS_NULLABLE) == 0) {
+    emit_docs_type(method->return_type, "---@return", "\n");
+  }
+
+  arg = method->arguments;
+  // nulable and refences returns
+  while (arg != NULL) {
+    if ((arg->type.type != TYPE_LITERAL) && (arg->type.flags & (TYPE_FLAGS_NULLABLE | TYPE_FLAGS_REFERNCE))) {
+      if (arg->type.flags & TYPE_FLAGS_NULLABLE) {
+        emit_docs_type(arg->type, "---@return", "|nil\n");
+      } else {
+        emit_docs_type(arg->type, "---@return", "\n");
+      }
+    }
+    arg = arg->next;
+  }
+
+  // function name
+  fprintf(docs, "function %s:%s(", name, method_name);
+  for (int i = 1; i < count; ++i) {
+    fprintf(docs, "param%i", i);
+    if (i < count-1) {
+      fprintf(docs, ", ");
+    }
+  }
+  fprintf(docs, ") end\n\n");
+}
+
 void emit_docs(struct userdata *node, int is_userdata, int emit_creation) {
   while(node) {
-    char *name = (char *)allocate(strlen(node->alias ? node->alias : node->sanatized_name) + 5);
+    char *name = (char *)allocate(strlen(node->rename ? node->rename : node->sanatized_name) + 5);
     if (is_userdata) {
-      sprintf(name, "%s_ud", node->alias ? node->alias : node->sanatized_name);
+      sprintf(name, "%s_ud", node->rename ? node->rename : node->sanatized_name);
     } else {
-      sprintf(name, "%s", node->alias ? node->alias : node->sanatized_name);
+      sprintf(name, "%s", node->rename ? node->rename : node->sanatized_name);
     }
 
 
@@ -2281,7 +2390,7 @@ void emit_docs(struct userdata *node, int is_userdata, int emit_creation) {
       if (emit_creation) {
         // creation function
         fprintf(docs, "---@return %s\n", name);
-        fprintf(docs, "function %s() end\n\n", node->alias ? node->alias : node->sanatized_name);
+        fprintf(docs, "function %s() end\n\n", node->rename ? node->rename : node->sanatized_name);
       }
     } else {
       // global
@@ -2298,12 +2407,12 @@ void emit_docs(struct userdata *node, int is_userdata, int emit_creation) {
             if (field->access_flags & ACCESS_FLAG_READ) {
               fprintf(docs, "-- get field\n");
               emit_docs_type(field->type, "---@return", "\n");
-              fprintf(docs, "function %s:%s() end\n\n", name, field->alias ? field->alias : field->name);
+              fprintf(docs, "function %s:%s() end\n\n", name, field->rename ? field->rename : field->name);
             }
             if (field->access_flags & ACCESS_FLAG_WRITE) {
               fprintf(docs, "-- set field\n");
               emit_docs_type(field->type, "---@param value", "\n");
-              fprintf(docs, "function %s:%s(value) end\n\n", name, field->alias ? field->alias : field->name);
+              fprintf(docs, "function %s:%s(value) end\n\n", name, field->rename ? field->rename : field->name);
             }
           } else {
             // array feild
@@ -2311,13 +2420,13 @@ void emit_docs(struct userdata *node, int is_userdata, int emit_creation) {
               fprintf(docs, "-- get array field\n");
               fprintf(docs, "---@param index integer\n");
               emit_docs_type(field->type, "---@return", "\n");
-              fprintf(docs, "function %s:%s(index) end\n\n", name, field->alias ? field->alias : field->name);
+              fprintf(docs, "function %s:%s(index) end\n\n", name, field->rename ? field->rename : field->name);
             }
             if (field->access_flags & ACCESS_FLAG_WRITE) {
               fprintf(docs, "-- set array field\n");
               fprintf(docs, "---@param index integer\n");
               emit_docs_type(field->type, "---@param value", "\n");
-              fprintf(docs, "function %s:%s(index, value) end\n\n", name, field->alias ? field->alias : field->name);
+              fprintf(docs, "function %s:%s(index, value) end\n\n", name, field->rename ? field->rename : field->name);
             }
           }
         field = field->next;
@@ -2327,57 +2436,71 @@ void emit_docs(struct userdata *node, int is_userdata, int emit_creation) {
     // methods
     struct method *method = node->methods;
     while(method) {
-      fprintf(docs, "-- desc\n");
+      emit_docs_method(name, method->rename ? method->rename : method->name, method);
 
-      struct argument *arg = method->arguments;
-      int count = 1;
-      // input arguments
-      while (arg != NULL) {
-        if ((arg->type.type != TYPE_LITERAL) && (arg->type.flags & (TYPE_FLAGS_NULLABLE | TYPE_FLAGS_REFERNCE)) == 0) {
-          char *param_name = (char *)allocate(20);
-          sprintf(param_name, "---@param param%i", count);
-          emit_docs_type(arg->type, param_name, "\n");
-          free(param_name);
-          count++;
-        }
-        arg = arg->next;
-      }
-
-      // return type
-      if ((method->flags & TYPE_FLAGS_NULLABLE) == 0) {
-        emit_docs_type(method->return_type, "---@return", "\n");
-      }
-
-      arg = method->arguments;
-      // nulable and refences returns
-      while (arg != NULL) {
-        if ((arg->type.type != TYPE_LITERAL) && (arg->type.flags & (TYPE_FLAGS_NULLABLE | TYPE_FLAGS_REFERNCE))) {
-          if (arg->type.flags & TYPE_FLAGS_NULLABLE) {
-            emit_docs_type(arg->type, "---@return", "|nil\n");
-          } else {
-            emit_docs_type(arg->type, "---@return", "\n");
-          }
-        }
-        arg = arg->next;
-      }
-
-      // function name
-      fprintf(docs, "function %s:%s(", name, method->alias ? method->alias : method->name);
-      for (int i = 1; i < count; ++i) {
-        fprintf(docs, "param%i", i);
-        if (i < count-1) {
-          fprintf(docs, ", ");
-        }
-      }
-      fprintf(docs, ") end\n\n");
       method = method->next;
     }
+
+    // aliases
+    struct method_alias *alias = node->method_aliases;
+    while(alias) {
+      // find the method this is a alias of
+      struct method * method = node->methods;
+      while (method != NULL && strcmp(method->name, alias->name)) {
+        method = method-> next;
+      }
+      if (method == NULL) {
+        error(ERROR_DOCS, "Could not fine Method %s to alias to %s", alias->name, alias->alias);
+      }
+
+      emit_docs_method(name, alias->alias, method);
+
+      alias = alias->next;
+    }
+
     fprintf(docs, "\n");
     free(name);
     node = node->next;
   }
 }
 
+
+void emit_index_helpers(void) {
+  fprintf(source, "static bool load_function(lua_State *L, const luaL_Reg *list, const uint8_t length, const char* name) {\n");
+  fprintf(source, "    for (uint8_t i = 0; i < length; i++) {\n");
+  fprintf(source, "        if (strcmp(name,list[i].name) == 0) {\n");
+  fprintf(source, "            lua_pushcfunction(L, list[i].func);\n");
+  fprintf(source, "            return true;\n");
+  fprintf(source, "        }\n");
+  fprintf(source, "    }\n");
+  fprintf(source, "    return false;\n");
+  fprintf(source, "}\n\n");
+
+  fprintf(source, "static bool load_enum(lua_State *L, const userdata_enum *list, const uint8_t length, const char* name) {\n");
+  fprintf(source, "    for (uint8_t i = 0; i < length; i++) {\n");
+  fprintf(source, "        if (strcmp(name,list[i].name) == 0) {\n");
+  fprintf(source, "            lua_pushinteger(L, list[i].value);\n");
+  fprintf(source, "            return true;\n");
+  fprintf(source, "        }\n");
+  fprintf(source, "    }\n");
+  fprintf(source, "    return false;\n");
+  fprintf(source, "}\n\n");
+}
+
+void emit_structs(void) {
+  // emit the enum header
+  fprintf(source, "struct userdata_enum {\n");
+  fprintf(source, "    const char *name;\n");
+  fprintf(source, "    int value;\n");
+  fprintf(source, "};\n\n");
+
+  // emit the meta table header
+  fprintf(source, "struct userdata_meta {\n");
+  fprintf(source, "    const char *name;\n");
+  fprintf(source, "    lua_CFunction func;\n");
+  fprintf(source, "    const luaL_Reg *operators;\n");
+  fprintf(source, "};\n\n");
+}
 
 char * output_path = NULL;
 char * docs_path = NULL;
@@ -2476,6 +2599,10 @@ int main(int argc, char **argv) {
 
   emit_not_supported_helper();
 
+  emit_structs();
+
+  emit_index_helpers();
+
   emit_userdata_allocators();
 
   emit_userdata_checkers();
@@ -2484,21 +2611,20 @@ int main(int argc, char **argv) {
 
   emit_ap_object_checkers();
 
-  emit_userdata_fields();
 
-  emit_userdata_methods(parsed_userdata);
-
-  emit_userdata_metatables();
 
   emit_singleton_fields();
+  emit_methods(parsed_singletons);
+  emit_index(parsed_singletons);
 
-  emit_userdata_methods(parsed_singletons);
+  emit_userdata_fields();
+  emit_methods(parsed_userdata);
+  emit_index(parsed_userdata);
 
-  emit_singleton_metatables(parsed_singletons);
 
-  emit_userdata_methods(parsed_ap_objects);
+  emit_methods(parsed_ap_objects);
+  emit_index(parsed_ap_objects);
 
-  emit_singleton_metatables(parsed_ap_objects);
 
   emit_loaders();
 

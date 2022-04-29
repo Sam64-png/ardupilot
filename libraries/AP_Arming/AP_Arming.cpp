@@ -17,6 +17,7 @@
 #include <AP_HAL/AP_HAL.h>
 #include <AP_BoardConfig/AP_BoardConfig.h>
 #include <AP_BattMonitor/AP_BattMonitor.h>
+#include <AP_Compass/AP_Compass.h>
 #include <AP_Notify/AP_Notify.h>
 #include <GCS_MAVLink/GCS.h>
 #include <GCS_MAVLink/GCS_MAVLink.h>
@@ -43,6 +44,7 @@
 #include <AP_OSD/AP_OSD.h>
 #include <AP_Button/AP_Button.h>
 #include <AP_FETtecOneWire/AP_FETtecOneWire.h>
+#include <AP_RPM/AP_RPM.h>
 
 #if HAL_MAX_CAN_PROTOCOL_DRIVERS
   #include <AP_CANManager/AP_CANManager.h>
@@ -125,6 +127,13 @@ const AP_Param::GroupInfo AP_Arming::var_info[] = {
     // @Bitmask{Plane}: 0:All,1:Barometer,2:Compass,3:GPS lock,4:INS,5:Parameters,6:RC Channels,7:Board voltage,8:Battery Level,9:Airspeed,10:Logging Available,11:Hardware safety switch,12:GPS Configuration,13:System,14:Mission,15:Rangefinder,16:Camera,17:AuxAuth,19:FFT
     // @User: Standard
     AP_GROUPINFO("CHECK",        8,     AP_Arming,  checks_to_perform,       ARMING_CHECK_ALL),
+
+    // @Param: OPTIONS
+    // @DisplayName: Arming options
+    // @Description: Options that can be applied to change arming behaviour
+    // @Values: 0:None,1:Disable prearm display
+    // @User: Advanced
+    AP_GROUPINFO_FRAME("OPTIONS", 9,   AP_Arming, _arming_options, 0, AP_PARAM_FRAME_COPTER),
 
     AP_GROUPEND
 };
@@ -796,7 +805,7 @@ bool AP_Arming::servo_checks(bool report) const
     bool check_passed = true;
     for (uint8_t i = 0; i < NUM_SERVO_CHANNELS; i++) {
         const SRV_Channel *c = SRV_Channels::srv_channel(i);
-        if (c == nullptr || c->get_function() == SRV_Channel::k_none) {
+        if (c == nullptr || c->get_function() <= SRV_Channel::k_none) {
             continue;
         }
 
@@ -808,6 +817,23 @@ bool AP_Arming::servo_checks(bool report) const
         if (c->get_output_max() < trim) {
             check_failed(report, "SERVO%d_MAX is less than SERVO%d_TRIM", i + 1, i + 1);
             check_passed = false;
+        }
+
+        // check functions using PWM are enabled
+        if (SRV_Channels::get_disabled_channel_mask() & 1U<<i) {
+            const SRV_Channel::Aux_servo_function_t ch_function = c->get_function();
+
+            // motors, e-stoppable functions, neopixels and ProfiLEDs may be digital outputs and thus can be disabled
+            const bool disabled_ok = SRV_Channel::is_motor(ch_function) ||
+                                     SRV_Channel::should_e_stop(ch_function) ||
+                                     (ch_function >= SRV_Channel::k_LED_neopixel1 && ch_function <= SRV_Channel::k_LED_neopixel4) ||
+                                     (ch_function >= SRV_Channel::k_ProfiLED_1 && ch_function <= SRV_Channel::k_ProfiLED_Clock);
+
+            // for all other functions raise a pre-arm failure
+            if (!disabled_ok) {
+                check_failed(report, "SERVO%u_FUNCTION=%u on disabled channel", i + 1, (unsigned)ch_function);
+                check_passed = false;
+            }
         }
     }
 
@@ -1364,6 +1390,21 @@ bool AP_Arming::arm(AP_Arming::Method method, const bool do_arming_checks)
         armed = false;
     }
 
+    if (armed && do_arming_checks && checks_to_perform == 0) {
+        gcs().send_text(MAV_SEVERITY_WARNING, "Warning: Arming Checks Disabled");
+    }
+
+#if AP_TERRAIN_AVAILABLE
+    if (armed) {
+        // tell terrain we have just armed, so it can setup
+        // a reference location for terrain adjustment
+        auto *terrain = AP::terrain();
+        if (terrain != nullptr) {
+            terrain->set_reference_location();
+        }
+    }
+#endif
+
     return armed;
 }
 
@@ -1482,8 +1523,7 @@ bool AP_Arming::disarm_switch_checks(bool display_failure) const
 {
     const RC_Channel *chan = rc().find_channel_for_option(RC_Channel::AUX_FUNC::DISARM);
     if (chan != nullptr &&
-        chan->get_aux_switch_pos() == RC_Channel::AuxSwitchPos::HIGH &&
-        (checks_to_perform & ARMING_CHECK_ALL)) {
+        chan->get_aux_switch_pos() == RC_Channel::AuxSwitchPos::HIGH) {
         check_failed(display_failure, "Disarm Switch on");
         return false;
     }

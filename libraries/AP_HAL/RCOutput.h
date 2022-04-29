@@ -31,6 +31,8 @@
 
 class ByteBuffer;
 
+class ExpandingString;
+
 class AP_HAL::RCOutput {
 public:
     virtual void init() = 0;
@@ -248,6 +250,11 @@ public:
     virtual bool get_output_mode_banner(char banner_msg[], uint8_t banner_msg_len) const { return false; }
 
     /*
+     * return mask of channels that must be disabled because they share a group with a digital channel
+     */
+    virtual uint16_t get_disabled_channels(uint16_t digital_mask) { return 0; }
+
+    /*
       set default update rate
      */
     virtual void    set_default_rate(uint16_t rate_hz) {}
@@ -309,6 +316,28 @@ public:
       trigger send of serial led
      */
     virtual void serial_led_send(const uint16_t chan) {}
+
+    virtual void timer_info(ExpandingString &str) {}
+
+    /*
+     * calculate the prescaler required to achieve the desire bitrate
+     */
+    static uint32_t calculate_bitrate_prescaler(uint32_t timer_clock, uint32_t target_frequency, bool is_dshot);
+
+    /*
+     * bit width values for different protocols
+     */
+    static constexpr uint32_t DSHOT_BIT_WIDTH_TICKS = 8;
+    static constexpr uint32_t DSHOT_BIT_0_TICKS = 3;
+    static constexpr uint32_t DSHOT_BIT_1_TICKS = 6;
+
+    // See WS2812B spec for expected pulse widths
+    static constexpr uint32_t NEOP_BIT_WIDTH_TICKS = 20;
+    static constexpr uint32_t NEOP_BIT_0_TICKS = 7;
+    static constexpr uint32_t NEOP_BIT_1_TICKS = 14;
+    // neopixel does not use pulse widths at all
+    static constexpr uint32_t PROFI_BIT_0_TICKS = 7;
+    static constexpr uint32_t PROFI_BIT_1_TICKS = 14;
 
 protected:
 

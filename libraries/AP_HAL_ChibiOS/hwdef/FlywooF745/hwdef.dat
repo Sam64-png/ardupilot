@@ -141,7 +141,6 @@ SPIDEV mpu6000 SPI4 DEVID4 MPU6000_CS MODE3  1*MHZ  4*MHZ
 # no built-in compass, but probe the i2c bus for all possible
 # external compass types
 define ALLOW_ARM_NO_COMPASS
-define HAL_COMPASS_DEFAULT HAL_COMPASS_NONE
 define HAL_PROBE_EXTERNAL_I2C_COMPASSES
 define HAL_I2C_INTERNAL_MASK 0
 
@@ -174,7 +173,11 @@ define PRECISION_LANDING 0
 define HAL_BARO_WIND_COMP_ENABLED 0
 define GRIPPER_ENABLED 0
 define HAL_PARACHUTE_ENABLED 0
+
+
+# minimal GPS drivers to reduce flash usage
+include ../include/minimal_GPS.inc
 define HAL_SPRAYER_ENABLED 0
-define HAL_BATTMON_SMBUS_ENABLE 0
-define HAL_BATTMON_FUEL_ENABLE 0
+define AP_BATTMON_SMBUS_ENABLE 0
+define AP_BATTMON_FUEL_ENABLE 0
 define AP_OPTICALFLOW_ENABLED 0

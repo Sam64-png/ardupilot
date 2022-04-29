@@ -31,6 +31,7 @@
 
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Common/AP_Common.h>
+#include <AP_Airspeed/AP_Airspeed.h>
 #include <AP_Param/AP_Param.h>
 #include <StorageManager/StorageManager.h>
 #include <AP_Math/AP_Math.h>        // ArduPilot Mega Vector/Matrix math Library
@@ -82,6 +83,7 @@
 #include <AP_Gripper/AP_Gripper.h>
 #include <AP_Landing/AP_Landing.h>
 #include <AP_LandingGear/AP_LandingGear.h>     // Landing Gear library
+#include <AP_Follow/AP_Follow.h>
 
 #include "GCS_Mavlink.h"
 #include "GCS_Plane.h"
@@ -280,6 +282,7 @@ private:
     ModeQLand mode_qland;
     ModeQRTL mode_qrtl;
     ModeQAcro mode_qacro;
+    ModeLoiterAltQLand mode_loiter_qland;
 #if QAUTOTUNE_ENABLED
     ModeQAutotune mode_qautotune;
 #endif  // QAUTOTUNE_ENABLED
@@ -287,9 +290,6 @@ private:
     ModeTakeoff mode_takeoff;
 #if HAL_SOARING_ENABLED
     ModeThermal mode_thermal;
-#endif
-#if HAL_QUADPLANE_ENABLED
-    ModeLoiterAltQLand mode_lotier_qland;
 #endif
 
     // This is the state of the flight control system
@@ -517,14 +517,17 @@ private:
 #if AP_SCRIPTING_ENABLED
     // support for scripting nav commands, with verify
     struct {
+        bool enabled;
         uint16_t id;
         float roll_rate_dps;
         float pitch_rate_dps;
         float yaw_rate_dps;
         float throttle_pct;
         uint32_t start_ms;
+        uint32_t current_ms;
         bool done;
     } nav_scripting;
+    
 #endif
 
     struct {
@@ -638,7 +641,7 @@ private:
 
     // terrain handling
 #if AP_TERRAIN_AVAILABLE
-    AP_Terrain terrain{mission};
+    AP_Terrain terrain;
 #endif
 
     AP_Landing landing{mission,ahrs,&TECS_controller,nav_controller,aparm,
@@ -717,9 +720,6 @@ private:
 
     // The location of the current/active waypoint.  Used for altitude ramp, track following and loiter calculations.
     Location next_WP_loc {};
-
-    // The location of the active waypoint in Guided mode.
-    struct Location guided_WP_loc {};
 
     // Altitude control
     struct {
@@ -878,7 +878,6 @@ private:
 
     void Log_Write_Fast(void);
     void Log_Write_Attitude(void);
-    void Log_Write_Startup(uint8_t type);
     void Log_Write_Control_Tuning();
     void Log_Write_OFG_Guided();
     void Log_Write_Guided(void);
@@ -892,7 +891,6 @@ private:
 
     // Parameters.cpp
     void load_parameters(void) override;
-    void convert_mixers(void);
 
     // commands_logic.cpp
     void set_next_WP(const struct Location &loc);
@@ -946,7 +944,7 @@ private:
 #endif
 
     // commands.cpp
-    void set_guided_WP(void);
+    void set_guided_WP(const Location &loc);
     void update_home();
     // set home location and store it persistently:
     bool set_home_persistently(const Location &loc) WARN_IF_UNUSED;
@@ -1056,7 +1054,6 @@ private:
     void startup_INS_ground(void);
     bool should_log(uint32_t mask);
     int8_t throttle_percentage(void);
-    void update_dynamic_notch() override;
     void notify_mode(const Mode& mode);
 
     // takeoff.cpp
@@ -1137,9 +1134,10 @@ private:
 
     // command throttle percentage and roll, pitch, yaw target
     // rates. For use with scripting controllers
-    bool set_target_throttle_rate_rpy(float throttle_pct, float roll_rate_dps, float pitch_rate_dps, float yaw_rate_dps) override;
+    void set_target_throttle_rate_rpy(float throttle_pct, float roll_rate_dps, float pitch_rate_dps, float yaw_rate_dps) override;
+    bool nav_scripting_enable(uint8_t mode) override;
 #endif
-
+ 
     enum Failsafe_Action {
         Failsafe_Action_None      = 0,
         Failsafe_Action_RTL       = 1,
@@ -1209,6 +1207,8 @@ public:
 #if AP_SCRIPTING_ENABLED
     bool set_target_location(const Location& target_loc) override;
     bool get_target_location(Location& target_loc) override;
+    bool update_target_location(const Location &old_loc, const Location &new_loc) override;
+    bool set_velocity_match(const Vector2f &velocity) override;
 #endif // AP_SCRIPTING_ENABLED
 
 };

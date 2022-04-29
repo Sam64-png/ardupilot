@@ -20,9 +20,9 @@
 #include <AP_Common/Location.h>
 #include <AP_Param/AP_Param.h>
 #include "GPS_detect_state.h"
-#include <AP_SerialManager/AP_SerialManager.h>
 #include <AP_MSP/msp.h>
 #include <AP_ExternalAHRS/AP_ExternalAHRS.h>
+#include <SITL/SIM_GPS.h>
 
 /**
    maximum number of GPS instances available on this platform. If more
@@ -128,6 +128,9 @@ public:
         GPS_TYPE_EXTERNAL_AHRS = 21,
         GPS_TYPE_UAVCAN_RTK_BASE = 22,
         GPS_TYPE_UAVCAN_RTK_ROVER = 23,
+#if HAL_SIM_GPS_ENABLED
+        GPS_TYPE_SITL = 100,
+#endif
     };
 
     /// GPS status codes
@@ -219,7 +222,7 @@ public:
     };
 
     /// Startup initialisation.
-    void init(const AP_SerialManager& serial_manager);
+    void init(const class AP_SerialManager& serial_manager);
 
     /// Update GPS state based on possible bytes received from the module.
     /// This routine must be called periodically (typically at 10Hz or
@@ -470,6 +473,7 @@ public:
     bool blend_health_check() const;
 
     // handle sending of initialisation strings to the GPS - only used by backends
+    void send_blob_start(uint8_t instance);
     void send_blob_start(uint8_t instance, const char *_blob, uint16_t size);
     void send_blob_update(uint8_t instance);
 
@@ -485,7 +489,7 @@ public:
     }
 
     // convert GPS week and millis to unix epoch in ms
-    static uint64_t time_epoch_convert(uint16_t gps_week, uint32_t gps_ms);
+    static uint64_t istate_time_to_epoch_ms(uint16_t gps_week, uint32_t gps_ms);
 
     static const struct AP_Param::GroupInfo var_info[];
 
